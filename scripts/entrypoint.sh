@@ -76,6 +76,22 @@ export "RCLONE_CONFIG_${remote}_ACL=${S3_ACL}"
 envsubst < /app/litestream.yml.tpl > /etc/litestream.yml
 echo "[entrypoint] litestream config rendered" >&2
 
+# Validate extra backup remotes (if backup is enabled)
+if [ "${BACKUP_ENABLED:-false}" = "true" ] && [ -n "${BACKUP_EXTRA_REMOTES:-}" ]; then
+  echo "[entrypoint] validating extra backup remotes..." >&2
+  echo "$BACKUP_EXTRA_REMOTES" | tr ',' '\n' | while IFS= read -r remote_path; do
+    remote_path=$(echo "$remote_path" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    [ -z "$remote_path" ] && continue
+    remote="${remote_path%%:*}"
+    if ! rclone config show "$remote" >/dev/null 2>&1; then
+      echo "[entrypoint] WARNING: remote '$remote' is not configured" >&2
+      echo "[entrypoint]   Make sure to set RCLONE_CONFIG_${remote}_TYPE and other required variables" >&2
+    else
+      echo "[entrypoint]   ✓ remote '$remote' configured" >&2
+    fi
+  done
+fi
+
 # Launch based on NODE_ROLE
 role="${NODE_ROLE:-primary}"
 case "$role" in

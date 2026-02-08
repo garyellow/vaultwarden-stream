@@ -83,7 +83,8 @@ SYNC_PID=$!
 
 # Start background backup loop (if enabled)
 if [ "${BACKUP_ENABLED:-false}" = "true" ]; then
-  echo "[primary] backup enabled (interval=${BACKUP_INTERVAL:-86400}s, retention=${BACKUP_RETENTION_DAYS:-30}d)" >&2
+  echo "[primary] backup enabled (interval=${BACKUP_INTERVAL:-86400}s, retention=${BACKUP_RETENTION_DAYS:-30}d, min_keep=${BACKUP_MIN_KEEP:-3})" >&2
+  [ -n "${BACKUP_EXTRA_REMOTES:-}" ] && echo "[primary] extra backup remotes: ${BACKUP_EXTRA_REMOTES}" >&2
   (
     # Run first backup immediately on startup, then continue with periodic schedule
     if create_backup; then

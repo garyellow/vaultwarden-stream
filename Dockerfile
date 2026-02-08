@@ -50,7 +50,9 @@ ENV NODE_ROLE=primary \
     HEALTHCHECK_SYNC_MAX_AGE=600 \
     BACKUP_ENABLED=false \
     BACKUP_INTERVAL=86400 \
-    BACKUP_RETENTION_DAYS=30
+    BACKUP_RETENTION_DAYS=30 \
+    BACKUP_MIN_KEEP=3 \
+    BACKUP_EXTRA_REMOTES=
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
   CMD /app/healthcheck.sh
