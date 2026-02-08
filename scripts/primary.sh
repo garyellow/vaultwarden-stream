@@ -1,18 +1,38 @@
 #!/bin/sh
 set -eu
 
-. /app/sync-attachments.sh
+. /app/sync.sh
+. /app/backup.sh
 
 SYNC_PID=""
+BACKUP_PID=""
 LITESTREAM_PID=""
 
 cleanup() {
   echo "[primary] shutdown signal received, cleaning up..." >&2
+
+  # Stop sync loop
   if [ -n "$SYNC_PID" ] && kill -0 "$SYNC_PID" 2>/dev/null; then
     kill "$SYNC_PID" 2>/dev/null || true
     wait "$SYNC_PID" 2>/dev/null || true
   fi
 
+  # Wait for backup to complete (with timeout) to avoid incomplete archives in S3
+  if [ -n "$BACKUP_PID" ] && kill -0 "$BACKUP_PID" 2>/dev/null; then
+    echo "[primary] waiting for backup to complete (timeout 60s)..." >&2
+    timeout=60
+    while [ $timeout -gt 0 ] && kill -0 "$BACKUP_PID" 2>/dev/null; do
+      sleep 1
+      timeout=$((timeout - 1))
+    done
+    if kill -0 "$BACKUP_PID" 2>/dev/null; then
+      echo "[primary] WARNING: backup timeout, forcing shutdown" >&2
+      kill "$BACKUP_PID" 2>/dev/null || true
+    fi
+    wait "$BACKUP_PID" 2>/dev/null || true
+  fi
+
+  # Stop Litestream
   if [ -n "$LITESTREAM_PID" ] && kill -0 "$LITESTREAM_PID" 2>/dev/null; then
     kill "$LITESTREAM_PID" 2>/dev/null || true
     wait "$LITESTREAM_PID" 2>/dev/null || true
@@ -60,6 +80,28 @@ write_sync_status "ok"
 ) &
 SYNC_PID=$!
 
+# Start background backup loop (if enabled)
+if [ "${BACKUP_ENABLED:-false}" = "true" ]; then
+  echo "[primary] backup enabled (interval=${BACKUP_INTERVAL:-86400}s, retention=${BACKUP_RETENTION_DAYS:-30}d)" >&2
+  (
+    # Immediate first backup on startup
+    if create_backup; then
+      echo "[primary] initial backup completed" >&2
+    else
+      echo "[primary] WARNING: initial backup failed" >&2
+    fi
+    while true; do
+      sleep "${BACKUP_INTERVAL:-86400}"
+      if create_backup; then
+        echo "[primary] backup completed" >&2
+      else
+        echo "[primary] WARNING: backup failed" >&2
+      fi
+    done
+  ) &
+  BACKUP_PID=$!
+fi
+
 # Launch Vaultwarden
 echo "[primary] starting vaultwarden..." >&2
 litestream replicate -config /etc/litestream.yml -exec "/vaultwarden" &
@@ -71,6 +113,16 @@ echo "[primary] litestream exited with code ${EXIT_CODE}, cleaning up..." >&2
 if [ -n "$SYNC_PID" ] && kill -0 "$SYNC_PID" 2>/dev/null; then
   kill "$SYNC_PID" 2>/dev/null || true
   wait "$SYNC_PID" 2>/dev/null || true
+fi
+# Wait for backup (brief timeout for normal exit)
+if [ -n "$BACKUP_PID" ] && kill -0 "$BACKUP_PID" 2>/dev/null; then
+  timeout=10
+  while [ $timeout -gt 0 ] && kill -0 "$BACKUP_PID" 2>/dev/null; do
+    sleep 1
+    timeout=$((timeout - 1))
+  done
+  kill "$BACKUP_PID" 2>/dev/null || true
+  wait "$BACKUP_PID" 2>/dev/null || true
 fi
 sync_attachments_upload || echo "[primary] WARNING: final upload failed" >&2
 write_sync_status "shutdown"

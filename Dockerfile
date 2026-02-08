@@ -3,12 +3,14 @@ FROM vaultwarden/server:latest
 # Install runtime dependencies and Litestream
 # - gettext-base: envsubst for rendering litestream.yml template
 # - rclone: S3-compatible file sync for attachments/sends
+# - sqlite3: Online Backup API for periodic snapshots
 # - wget: used only during build to download Litestream (removed after)
 # Note: ca-certificates and curl are already included in the base image
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         gettext-base \
         rclone \
+        sqlite3 \
         wget && \
     wget -qO- "https://github.com/benbjohnson/litestream/releases/latest/download/litestream-linux-$(dpkg --print-architecture).tar.gz" | \
         tar -xz -C /usr/local/bin && \
@@ -34,7 +36,10 @@ ENV NODE_ROLE=primary \
     S3_PREFIX=vaultwarden \
     S3_REGION=auto \
     S3_ACL=private \
-    HEALTHCHECK_SYNC_MAX_AGE=600
+    HEALTHCHECK_SYNC_MAX_AGE=600 \
+    BACKUP_ENABLED=false \
+    BACKUP_INTERVAL=86400 \
+    BACKUP_RETENTION_DAYS=30
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
   CMD /app/healthcheck.sh

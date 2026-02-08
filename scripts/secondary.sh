@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-. /app/sync-attachments.sh
+. /app/sync.sh
 
 VW_PID=""
 STOP_REQUESTED=""

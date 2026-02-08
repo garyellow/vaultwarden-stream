@@ -1,18 +1,4 @@
-# =============================================================================
-# Vaultwarden Stream — Docker Compose
-# =============================================================================
-# 1. Copy .env.example to .env
-# 2. Fill in S3 credentials (S3_BUCKET, S3_ENDPOINT, etc.)
-# 3. Set NODE_ROLE:
-#    - NODE_ROLE=primary   (default, main instance with Litestream)
-#    - NODE_ROLE=secondary (DR standby, for disaster recovery)
-# 4. Set DEPLOYMENT_MODE:
-#    - DEPLOYMENT_MODE=persistent  (default, long-running container)
-#    - DEPLOYMENT_MODE=serverless  (affects SECONDARY only: skips periodic refresh)
-#
-# Usage:
-#   docker compose up -d
-# =============================================================================
+# Usage: cp .env.example .env && docker compose up -d
 
 services:
   vaultwarden:
