@@ -1,11 +1,11 @@
 FROM vaultwarden/server:latest
 
 # Install runtime dependencies and Litestream
-# - gettext-base: envsubst for rendering litestream.yml template
-# - rclone: S3-compatible file sync for attachments/sends
-# - sqlite3: Online Backup API for periodic snapshots
-# - wget: used only during build to download Litestream (removed after)
-# Note: ca-certificates and curl are already included in the base image
+# - gettext-base: Provides envsubst for environment variable substitution in litestream.yml
+# - rclone: Syncs files (attachments, sends, RSA keys) to S3-compatible storage
+# - sqlite3: Provides online backup API for periodic database snapshots
+# - wget: Used during build to download Litestream binary (removed after installation)
+# Note: ca-certificates and curl are already included in the base Vaultwarden image
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         gettext-base \

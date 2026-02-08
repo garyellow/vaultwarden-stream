@@ -4,12 +4,12 @@ Vaultwarden with automated S3 backup — real-time database replication via [Lit
 
 ## Features
 
-- **Real-time database backup** — Litestream replicates SQLite WAL to S3 (~1s)
-- **File sync** — Attachments, sends, RSA keys synced to S3 (every 5 min)
-- **Stateless** — All data restored from S3 on startup
-- **Serverless ready** — Scale-to-zero on Cloud Run, Fly.io, etc.
-- **Disaster recovery** — Secondary standby on a different platform
-- **Snapshot backup** — Optional periodic tar.gz for migration and compliance
+- **Real-time database backup** — Litestream replicates SQLite WAL changes to S3 (~1 second delay)
+- **File sync** — Attachments, sends, and RSA keys automatically synced to S3 (every 5 minutes)
+- **Fully stateless** — All data stored in S3; freshly restored on every startup
+- **Serverless ready** — Supports scale-to-zero on platforms like Cloud Run, Fly.io, etc.
+- **Disaster recovery** — Run a secondary standby instance on a different platform
+- **Snapshot backup** — Optional periodic tar.gz backups for migration, compliance, or extra safety
 
 ## Quick Start
 
@@ -70,12 +70,12 @@ All Vaultwarden and Litestream settings are also supported. See [.env.example](.
 
 For scale-to-zero deployments:
 
-- Set `max-instances=1` — SQLite allows only one writer
-- Set `stop_grace_period: 30s` — ensures graceful shutdown
-- Set `ENABLE_WEBSOCKET=false` — WebSocket keeps connections alive and prevents scaling to zero; disabling switches clients to 30-minute polling
-- Set `BACKUP_ENABLED=false` — periodic snapshots are not suitable for scale-to-zero
+- Set `max-instances=1` — SQLite only supports one writer at a time
+- Set `stop_grace_period: 30s` — gives enough time for graceful shutdown and final data upload
+- Set `ENABLE_WEBSOCKET=false` — WebSocket connections keep the instance alive; disabling it allows scale-to-zero (clients will use 30-minute polling instead)
+- Set `BACKUP_ENABLED=false` — periodic snapshot backups prevent scale-to-zero since they run continuously
 
-All pending data is flushed to S3 on shutdown (SIGTERM). Zero data loss on graceful shutdown.
+All pending data is automatically flushed to S3 during graceful shutdown (SIGTERM), ensuring zero data loss.
 
 ## Architecture
 
@@ -91,7 +91,7 @@ All pending data is flushed to S3 on shutdown (SIGTERM). Zero data loss on grace
 └───────────────────────────────────┼─┼──────────┘
                                     │ │
                               ┌─────▼─▼─────┐
-                              │  S3 Storage  │
+                              │  S3 Storage │
                               └─────┬─┬─────┘
                                     │ │
 ┌───────────────────────────────────┼─┼──────────┐
@@ -112,15 +112,20 @@ All pending data is flushed to S3 on shutdown (SIGTERM). Zero data loss on grace
 
 ## Snapshot Backup
 
-Optional periodic tar.gz backup as insurance — independent of Litestream.
+Optional periodic tar.gz backups — independent of Litestream's real-time replication.
 
 ```bash
 BACKUP_ENABLED=true
-BACKUP_INTERVAL=86400        # Every 24 hours
-BACKUP_RETENTION_DAYS=30     # Keep 30 days
+BACKUP_INTERVAL=86400        # Run backup every 24 hours
+BACKUP_RETENTION_DAYS=30     # Keep backups for 30 days
 ```
 
-Snapshots are uploaded to `s3://<bucket>/<prefix>/backups/`. Useful for migration, compliance, or as an extra safety net.
+Snapshots are uploaded to `s3://<bucket>/<prefix>/backups/`. Each snapshot contains:
+- Complete database (via SQLite backup API)
+- All attachments and sends
+- RSA keys and config.json
+
+Useful for migration, compliance requirements, or as additional insurance beyond Litestream.
 
 ### Restore from Snapshot
 
@@ -135,24 +140,26 @@ docker run -d -v /data:/data -p 80:80 vaultwarden/server:latest
 
 ## Disaster Recovery
 
-If the primary platform goes down:
+If the primary instance becomes unavailable:
 
-1. Point clients to the secondary instance
-2. Login sessions are preserved (RSA keys are synced)
-3. Data is current within `SECONDARY_SYNC_INTERVAL` (persistent) or latest on cold start (serverless)
+1. Point your clients to the secondary instance URL
+2. Login sessions are preserved (RSA keys are synced to both instances)
+3. Data freshness:
+   - Persistent mode: within `SECONDARY_SYNC_INTERVAL` (default 1 hour)
+   - Serverless mode: restored from latest S3 state on cold start
 
-> **Warning:** Never run two primary instances simultaneously — SQLite allows only one writer.
+> **Warning:** Never run two primary instances at the same time — SQLite only supports one writer.
 
 ## Data Safety
 
-| Scenario | Data Loss |
-|----------|-----------|
+| Scenario | Maximum Data Loss |
+|----------|------------------|
 | Graceful shutdown (scale-to-zero, restart) | None |
-| Catastrophic crash (SIGKILL, power loss) | Up to ~1s of database changes |
+| Catastrophic crash (SIGKILL, power loss) | Up to ~1 second of recent database changes |
 
-**Recommendations:**
-- Enable S3 bucket versioning for additional protection
-- Set S3 lifecycle rules to auto-expire old versions
+**Additional Protection:**
+- Enable S3 bucket versioning to protect against accidental deletion or corruption
+- Configure S3 lifecycle rules to automatically expire old versions after a retention period
 
 ## Troubleshooting
 

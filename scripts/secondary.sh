@@ -32,7 +32,11 @@ restore_database() {
     return 1
   fi
 
-  # Quick swap: stop VW → replace DB → start VW (~2-3s total)
+  # Quick database swap process:
+  # 1. Stop Vaultwarden
+  # 2. Replace database file
+  # 3. Restart Vaultwarden
+  # Total downtime: ~2-3 seconds
   echo "[secondary] swapping database..." >&2
   stop_vaultwarden
   rm -f "$LITESTREAM_DB_PATH" "$LITESTREAM_DB_PATH-shm" "$LITESTREAM_DB_PATH-wal"
@@ -79,16 +83,19 @@ else
 fi
 start_vaultwarden
 
-# ── Main loop: supervised Vaultwarden ───────────────────────────
-# Persistent mode:
-#   Refreshes every SECONDARY_SYNC_INTERVAL:
-#     1. Download latest attachments/keys via rclone (safe while VW runs)
-#     2. Restore DB to temp file (background, doesn't affect running VW)
-#     3. Stop Vaultwarden → swap DB → restart Vaultwarden (~2-3s)
-# Serverless mode:
-#   No periodic refresh — each cold start restores fresh data from S3.
+# Main loop: Keep Vaultwarden running and refresh data periodically
 #
-# Both modes: heartbeat every 60s + supervised Vaultwarden restart.
+# Persistent mode:
+#   - Refreshes data from S3 every SECONDARY_SYNC_INTERVAL seconds
+#   - Downloads attachments/keys while Vaultwarden is running (safe)
+#   - Restores database to temp file, then swaps it (~2-3 seconds downtime)
+#
+# Serverless mode:
+#   - No periodic refresh needed (data is restored fresh on every cold start)
+#
+# Both modes:
+#   - Writes heartbeat status every 60 seconds for healthcheck
+#   - Automatically restarts Vaultwarden if it exits unexpectedly
 
 heartbeat_counter=0
 seconds_since_refresh=0

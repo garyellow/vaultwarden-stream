@@ -13,7 +13,8 @@ create_backup() {
   echo "[backup] starting snapshot backup..." >&2
   mkdir -p "$backup_dir"
 
-  # Database snapshot via sqlite3 .backup (safe alongside Litestream)
+  # Create database snapshot using sqlite3 .backup command
+  # This uses shared locks and is safe to run while Litestream is replicating
   echo "[backup] creating database snapshot..." >&2
   if ! sqlite3 "$LITESTREAM_DB_PATH" ".backup '${backup_dir}/db.sqlite3'"; then
     echo "[backup] ERROR: database backup failed" >&2

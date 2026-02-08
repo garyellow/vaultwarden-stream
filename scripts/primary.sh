@@ -17,7 +17,8 @@ cleanup() {
     wait "$SYNC_PID" 2>/dev/null || true
   fi
 
-  # Wait for backup to complete (with timeout) to avoid incomplete archives in S3
+  # Wait for current backup to complete (with 60 second timeout)
+  # This prevents incomplete backup archives from being uploaded to S3
   if [ -n "$BACKUP_PID" ] && kill -0 "$BACKUP_PID" 2>/dev/null; then
     echo "[primary] waiting for backup to complete (timeout 60s)..." >&2
     timeout=60
@@ -84,7 +85,7 @@ SYNC_PID=$!
 if [ "${BACKUP_ENABLED:-false}" = "true" ]; then
   echo "[primary] backup enabled (interval=${BACKUP_INTERVAL:-86400}s, retention=${BACKUP_RETENTION_DAYS:-30}d)" >&2
   (
-    # Immediate first backup on startup
+    # Run first backup immediately on startup, then continue with periodic schedule
     if create_backup; then
       echo "[primary] initial backup completed" >&2
     else
@@ -114,7 +115,7 @@ if [ -n "$SYNC_PID" ] && kill -0 "$SYNC_PID" 2>/dev/null; then
   kill "$SYNC_PID" 2>/dev/null || true
   wait "$SYNC_PID" 2>/dev/null || true
 fi
-# Wait for backup (brief timeout for normal exit)
+# Wait up to 10 seconds for backup to complete during normal exit
 if [ -n "$BACKUP_PID" ] && kill -0 "$BACKUP_PID" 2>/dev/null; then
   timeout=10
   while [ $timeout -gt 0 ] && kill -0 "$BACKUP_PID" 2>/dev/null; do

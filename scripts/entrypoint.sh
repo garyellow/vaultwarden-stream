@@ -23,7 +23,8 @@ require_var S3_SECRET_ACCESS_KEY
 : "${SECONDARY_SYNC_INTERVAL:=3600}"
 : "${DEPLOYMENT_MODE:=persistent}"
 
-# Normalize prefix to avoid leading/trailing slashes and accidental double slashes.
+# Clean up S3_PREFIX by removing leading/trailing slashes and fixing double slashes
+# This ensures paths like "vaultwarden" and "/vaultwarden/" are normalized to "vaultwarden"
 S3_PREFIX=$(echo "$S3_PREFIX" | sed -e 's#^/*##' -e 's#/*$##' -e 's#//*#/#g')
 : "${LITESTREAM_REPLICA_PATH:=${S3_PREFIX}/db.sqlite3}"
 export S3_REGION S3_ACL S3_PREFIX LITESTREAM_REPLICA_PATH
@@ -60,7 +61,8 @@ case "$remote" in
     ;;
 esac
 
-# Auto-configure rclone remote from shared S3 credentials
+# Configure rclone to use S3 credentials
+# This creates a virtual rclone remote without needing a config file
 export "RCLONE_CONFIG_${remote}_TYPE=s3"
 export "RCLONE_CONFIG_${remote}_PROVIDER=${S3_PROVIDER}"
 export "RCLONE_CONFIG_${remote}_ACCESS_KEY_ID=${S3_ACCESS_KEY_ID}"
@@ -69,7 +71,8 @@ export "RCLONE_CONFIG_${remote}_ENDPOINT=${S3_ENDPOINT}"
 export "RCLONE_CONFIG_${remote}_REGION=${S3_REGION}"
 export "RCLONE_CONFIG_${remote}_ACL=${S3_ACL}"
 
-# Render Litestream config from template
+# Generate Litestream configuration from template
+# Substitutes environment variables like $S3_BUCKET, $S3_PREFIX, etc.
 envsubst < /app/litestream.yml.tpl > /etc/litestream.yml
 echo "[entrypoint] litestream config rendered" >&2
 
