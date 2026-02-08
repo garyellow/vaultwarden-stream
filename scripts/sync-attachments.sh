@@ -1,0 +1,105 @@
+#!/bin/sh
+set -eu
+
+SYNC_STATUS_FILE="/tmp/sync-status.json"
+
+remote_base() {
+  echo "${RCLONE_REMOTE_NAME}:${S3_BUCKET}/${S3_PREFIX}"
+}
+
+rclone_safe() {
+  rclone ${RCLONE_FLAGS:-} "$@"
+}
+
+remote_path_exists() {
+  rclone_safe lsf --max-depth 1 "$1" >/dev/null 2>&1
+}
+
+write_sync_status() {
+  status="$1"
+  ts=$(date +%s)
+  iso=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  role="${NODE_ROLE:-primary}"
+  cat > "$SYNC_STATUS_FILE" <<EOF
+{"status":"${status}","role":"${role}","timestamp":${ts},"datetime":"${iso}"}
+EOF
+}
+
+# Sync RSA keys and config.json individually (may not exist on first deployment)
+sync_core_files() {
+  src="$1"
+  dst="$2"
+  for file in rsa_key.pem rsa_key.pub.pem config.json; do
+    rclone_safe copy "${src}/${file}" "${dst}/" 2>/dev/null || true
+  done
+}
+
+# Upload with safeguards: checks S3 reachability, prevents mass-delete, uses backup-dir
+sync_attachments_upload() {
+  base="$(remote_base)"
+
+  if ! rclone_safe lsf --max-depth 1 "${base}" >/dev/null 2>&1; then
+    echo "[upload] ERROR: S3 is unreachable; skipping upload" >&2
+    return 1
+  fi
+
+  suffix=".deleted.$(date -u +%Y%m%dT%H%M%SZ)"
+  trash_base="${base}/_trash"
+
+  local_attachments_count=$(find /data/attachments -type f 2>/dev/null | wc -l | tr -d ' ')
+  if [ "${local_attachments_count}" -eq 0 ]; then
+    remote_attachments_count=$(rclone_safe lsf --files-only --recursive "${base}/attachments" 2>/dev/null | wc -l | tr -d ' ')
+    if [ "${remote_attachments_count}" -gt 0 ]; then
+      echo "[upload] ERROR: local attachments empty but remote has data; refusing to sync-delete" >&2
+      return 1
+    fi
+  fi
+
+  local_sends_count=$(find /data/sends -type f 2>/dev/null | wc -l | tr -d ' ')
+  if [ "${local_sends_count}" -eq 0 ]; then
+    remote_sends_count=$(rclone_safe lsf --files-only --recursive "${base}/sends" 2>/dev/null | wc -l | tr -d ' ')
+    if [ "${remote_sends_count}" -gt 0 ]; then
+      echo "[upload] ERROR: local sends empty but remote has data; refusing to sync-delete" >&2
+      return 1
+    fi
+  fi
+
+  if ! rclone_safe sync /data/attachments "${base}/attachments" --backup-dir "${trash_base}/attachments" --suffix "${suffix}"; then
+    echo "[upload] ERROR: attachments sync failed" >&2
+    return 1
+  fi
+
+  if ! rclone_safe sync /data/sends "${base}/sends" --backup-dir "${trash_base}/sends" --suffix "${suffix}"; then
+    echo "[upload] ERROR: sends sync failed" >&2
+    return 1
+  fi
+  sync_core_files "/data" "${base}"
+}
+
+# Download from S3 (mirrors S3 exactly)
+sync_attachments_download() {
+  base="$(remote_base)"
+  if ! remote_path_exists "${base}"; then
+    echo "[download] ERROR: S3 is unreachable; skipping download" >&2
+    return 1
+  fi
+
+  if remote_path_exists "${base}/attachments"; then
+    if ! rclone_safe sync "${base}/attachments" /data/attachments; then
+      echo "[download] ERROR: attachments sync failed" >&2
+      return 1
+    fi
+  else
+    echo "[download] WARNING: attachments not found in remote; skipping" >&2
+  fi
+
+  if remote_path_exists "${base}/sends"; then
+    if ! rclone_safe sync "${base}/sends" /data/sends; then
+      echo "[download] ERROR: sends sync failed" >&2
+      return 1
+    fi
+  else
+    echo "[download] WARNING: sends not found in remote; skipping" >&2
+  fi
+  sync_core_files "${base}" "/data"
+}
