@@ -67,11 +67,10 @@ upload_to_extra_remotes() {
   echo "$BACKUP_EXTRA_REMOTES" | tr ',' '\n' | while IFS= read -r dest; do
     dest=$(echo "$dest" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
     [ -z "$dest" ] && continue
-    echo "[backup] uploading to ${dest}/backups/..." >&2
-    if rclone_safe copy "$local_file" "${dest}/backups/"; then
-      echo "[backup] uploaded $(basename "$local_file") to ${dest}" >&2
+    if rclone_safe copy "$local_file" "${dest}/backups/" 2>&1; then
+      echo "[backup] uploaded to ${dest}" >&2
     else
-      echo "[backup] WARNING: upload to ${dest} failed (check remote config)" >&2
+      echo "[backup] WARNING: upload to ${dest} failed" >&2
     fi
   done
 }
@@ -93,14 +92,12 @@ create_backup() {
   backup_name="vaultwarden-${timestamp}.tar.gz"
   base="$(remote_base)"
 
-  echo "[backup] starting snapshot backup..." >&2
   mkdir -p "$backup_dir"
 
   # Create database snapshot using sqlite3 .backup command
   # This uses shared locks and is safe to run while Litestream is replicating
-  echo "[backup] creating database snapshot..." >&2
-  if ! sqlite3 "$LITESTREAM_DB_PATH" ".backup '${backup_dir}/db.sqlite3'"; then
-    echo "[backup] ERROR: database backup failed" >&2
+  if ! sqlite3 "$LITESTREAM_DB_PATH" ".backup '${backup_dir}/db.sqlite3'" 2>&1; then
+    echo "[backup] ERROR: database snapshot failed" >&2
     rm -rf "$backup_dir"
     return 1
   fi
@@ -119,8 +116,7 @@ create_backup() {
   done
 
   # Create archive
-  echo "[backup] creating archive ${backup_name}..." >&2
-  if ! tar -czf "/tmp/${backup_name}" -C "$backup_dir" .; then
+  if ! tar -czf "/tmp/${backup_name}" -C "$backup_dir" . 2>&1; then
     echo "[backup] ERROR: archive creation failed" >&2
     rm -rf "$backup_dir" "/tmp/${backup_name}"
     return 1
@@ -128,13 +124,12 @@ create_backup() {
   rm -rf "$backup_dir"
 
   # Upload to primary S3
-  echo "[backup] uploading to ${base}/backups/..." >&2
-  if ! rclone_safe copy "/tmp/${backup_name}" "${base}/backups/"; then
-    echo "[backup] ERROR: upload to primary failed" >&2
+  if ! rclone_safe copy "/tmp/${backup_name}" "${base}/backups/" 2>&1; then
+    echo "[backup] ERROR: upload failed" >&2
     rm -f "/tmp/${backup_name}"
     return 1
   fi
-  echo "[backup] uploaded ${backup_name} to primary" >&2
+  echo "[backup] created ${backup_name}" >&2
 
   # Upload to extra remotes (best-effort)
   upload_to_extra_remotes "/tmp/${backup_name}"

@@ -19,7 +19,6 @@ stop_vaultwarden() {
 start_vaultwarden() {
   /vaultwarden &
   VW_PID=$!
-  echo "[secondary] vaultwarden started (pid: $VW_PID)" >&2
 }
 
 restore_database() {
@@ -37,7 +36,6 @@ restore_database() {
   # 2. Replace database file
   # 3. Restart Vaultwarden
   # Total downtime: ~2-3 seconds
-  echo "[secondary] swapping database..." >&2
   stop_vaultwarden
   rm -f "$LITESTREAM_DB_PATH" "$LITESTREAM_DB_PATH-shm" "$LITESTREAM_DB_PATH-wal"
   mv "$tmp_db" "$LITESTREAM_DB_PATH"
@@ -58,7 +56,6 @@ trap cleanup TERM INT
 mkdir -p /data/attachments /data/sends
 
 # ── Initial restore from S3 ─────────────────────────────────────
-echo "[secondary] cleaning local database files..." >&2
 rm -f "$LITESTREAM_DB_PATH" "$LITESTREAM_DB_PATH-shm" "$LITESTREAM_DB_PATH-wal"
 rm -rf "$LITESTREAM_DB_PATH-litestream"
 
@@ -123,7 +120,6 @@ while [ -z "$STOP_REQUESTED" ]; do
     seconds_since_refresh=$((seconds_since_refresh + 1))
     if [ "$seconds_since_refresh" -ge "$SECONDARY_SYNC_INTERVAL" ]; then
       seconds_since_refresh=0
-      echo "[secondary] refreshing data from S3..." >&2
       refresh_ok=true
 
       # Download attachments/keys (safe while VW is running)
@@ -139,10 +135,10 @@ while [ -z "$STOP_REQUESTED" ]; do
 
       if [ "$refresh_ok" = true ]; then
         write_sync_status "ok"
-        echo "[secondary] refresh complete" >&2
+        echo "[secondary] refresh completed" >&2
       else
         write_sync_status "error"
-        echo "[secondary] WARNING: refresh had errors" >&2
+        echo "[secondary] WARNING: refresh failed" >&2
       fi
     fi
   fi

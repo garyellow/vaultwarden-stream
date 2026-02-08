@@ -74,7 +74,6 @@ export "RCLONE_CONFIG_${remote}_ACL=${S3_ACL}"
 # Generate Litestream configuration from template
 # Substitutes environment variables like $S3_BUCKET, $S3_PREFIX, etc.
 envsubst < /app/litestream.yml.tpl > /etc/litestream.yml
-echo "[entrypoint] litestream config rendered" >&2
 
 # Validate extra backup remotes (if backup is enabled)
 if [ "${BACKUP_ENABLED:-false}" = "true" ] && [ -n "${BACKUP_EXTRA_REMOTES:-}" ]; then
@@ -100,6 +99,9 @@ case "$role" in
       echo "[entrypoint] NOTE: primary on serverless — set max-instances=1 to prevent concurrent writers" >&2
     fi
     echo "[entrypoint] launching primary (vaultwarden + litestream + rclone upload)..." >&2
+    echo "[entrypoint] S3: ${S3_PROVIDER} ${S3_BUCKET}/${S3_PREFIX}" >&2
+    echo "[entrypoint] sync interval: ${PRIMARY_SYNC_INTERVAL}s" >&2
+    [ "${BACKUP_ENABLED:-false}" = "true" ] && echo "[entrypoint] backup interval: ${BACKUP_INTERVAL:-86400}s" >&2
     exec /app/primary.sh
     ;;
   secondary)
@@ -108,6 +110,7 @@ case "$role" in
     else
       echo "[entrypoint] launching secondary (persistent — periodic refresh every ${SECONDARY_SYNC_INTERVAL}s)..." >&2
     fi
+    echo "[entrypoint] S3: ${S3_PROVIDER} ${S3_BUCKET}/${S3_PREFIX}" >&2
     exec /app/secondary.sh
     ;;
   *)

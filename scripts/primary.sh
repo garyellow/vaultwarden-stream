@@ -50,7 +50,6 @@ trap cleanup TERM INT
 mkdir -p /data/attachments /data/sends
 
 # Restore from S3
-echo "[primary] cleaning local database files..." >&2
 rm -f "$LITESTREAM_DB_PATH" "$LITESTREAM_DB_PATH-shm" "$LITESTREAM_DB_PATH-wal"
 rm -rf "$LITESTREAM_DB_PATH-litestream"
 
@@ -68,14 +67,16 @@ fi
 write_sync_status "ok"
 
 # Start background upload loop
+echo "[primary] starting sync loop (interval=${PRIMARY_SYNC_INTERVAL}s)" >&2
 (
   while true; do
     sleep "$PRIMARY_SYNC_INTERVAL"
     if sync_attachments_upload; then
       write_sync_status "ok"
+      echo "[primary] sync completed" >&2
     else
       write_sync_status "error"
-      echo "[primary] WARNING: periodic upload failed" >&2
+      echo "[primary] WARNING: sync failed" >&2
     fi
   done
 ) &
@@ -83,20 +84,14 @@ SYNC_PID=$!
 
 # Start background backup loop (if enabled)
 if [ "${BACKUP_ENABLED:-false}" = "true" ]; then
-  echo "[primary] backup enabled (interval=${BACKUP_INTERVAL:-86400}s, retention=${BACKUP_RETENTION_DAYS:-30}d, min_keep=${BACKUP_MIN_KEEP:-3})" >&2
-  [ -n "${BACKUP_EXTRA_REMOTES:-}" ] && echo "[primary] extra backup remotes: ${BACKUP_EXTRA_REMOTES}" >&2
   (
     # Run first backup immediately on startup, then continue with periodic schedule
-    if create_backup; then
-      echo "[primary] initial backup completed" >&2
-    else
+    if ! create_backup; then
       echo "[primary] WARNING: initial backup failed" >&2
     fi
     while true; do
       sleep "${BACKUP_INTERVAL:-86400}"
-      if create_backup; then
-        echo "[primary] backup completed" >&2
-      else
+      if ! create_backup; then
         echo "[primary] WARNING: backup failed" >&2
       fi
     done
