@@ -31,11 +31,7 @@ restore_database() {
     return 1
   fi
 
-  # Quick database swap process:
-  # 1. Stop Vaultwarden
-  # 2. Replace database file
-  # 3. Restart Vaultwarden
-  # Total downtime: ~2-3 seconds
+  # Swap database atomically with minimal downtime
   stop_vaultwarden
   rm -f "$LITESTREAM_DB_PATH" "$LITESTREAM_DB_PATH-shm" "$LITESTREAM_DB_PATH-wal"
   mv "$tmp_db" "$LITESTREAM_DB_PATH"

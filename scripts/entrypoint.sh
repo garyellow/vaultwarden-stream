@@ -24,8 +24,7 @@ require_var S3_SECRET_ACCESS_KEY
 : "${SECONDARY_SYNC_INTERVAL:=3600}"
 : "${DEPLOYMENT_MODE:=persistent}"
 
-# Clean up S3_PREFIX by removing leading/trailing slashes and fixing double slashes
-# This ensures paths like "vaultwarden" and "/vaultwarden/" are normalized to "vaultwarden"
+# Normalize S3_PREFIX (remove leading/trailing slashes)
 S3_PREFIX=$(echo "$S3_PREFIX" | sed -e 's#^/*##' -e 's#/*$##' -e 's#//*#/#g')
 : "${LITESTREAM_REPLICA_PATH:=${S3_PREFIX}/db.sqlite3}"
 export S3_REGION S3_ACL S3_PREFIX S3_NO_CHECK_BUCKET LITESTREAM_REPLICA_PATH
@@ -53,7 +52,7 @@ case "$DEPLOYMENT_MODE" in
     ;;
 esac
 
-# Validate RCLONE_REMOTE_NAME (used in shell variable expansion, must be safe)
+# Validate RCLONE_REMOTE_NAME (must be safe for shell variable expansion)
 remote="${RCLONE_REMOTE_NAME:-S3}"
 case "$remote" in
   *[!A-Za-z0-9_]*)

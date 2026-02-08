@@ -11,14 +11,10 @@ LABEL org.opencontainers.image.url="https://github.com/garyellow/vaultwarden-str
 LABEL org.opencontainers.image.source="https://github.com/garyellow/vaultwarden-stream"
 LABEL org.opencontainers.image.licenses="MIT"
 
-# Copy Litestream binary from official image
+# Copy Litestream binary
 COPY --from=litestream /usr/local/bin/litestream /usr/local/bin/litestream
 
-# Install runtime dependencies
-# - gettext-base: Provides envsubst for environment variable substitution in litestream.yml
-# - rclone: Syncs files (attachments, sends, RSA keys) to S3-compatible storage
-# - sqlite3: Provides online backup API for periodic database snapshots
-# Note: ca-certificates and curl are already included in the base Vaultwarden image
+# Install dependencies: envsubst, rclone, sqlite3
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         gettext-base \
@@ -27,14 +23,11 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
-# Copy configuration template (less frequently changed)
+# Copy configuration and scripts
 COPY config/litestream.yml.tpl /app/litestream.yml.tpl
-
-# Copy scripts (more frequently changed - better cache utilization)
 COPY --chmod=0755 scripts/ /app/
 
-# Default environment variables (all can be overridden at runtime via
-# docker run -e, docker-compose environment:, or .env files)
+# Default environment variables
 ENV NODE_ROLE=primary \
     DEPLOYMENT_MODE=persistent \
     PRIMARY_SYNC_INTERVAL=300 \
@@ -43,6 +36,8 @@ ENV NODE_ROLE=primary \
     LITESTREAM_SYNC_INTERVAL=1s \
     LITESTREAM_SNAPSHOT_INTERVAL=30m \
     LITESTREAM_RETENTION=24h \
+    LITESTREAM_SHUTDOWN_TIMEOUT=30 \
+    BACKUP_SHUTDOWN_TIMEOUT=60 \
     RCLONE_REMOTE_NAME=S3 \
     S3_PREFIX=vaultwarden \
     S3_REGION=auto \

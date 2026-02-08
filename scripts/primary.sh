@@ -17,14 +17,13 @@ cleanup() {
     wait "$SYNC_PID" 2>/dev/null || true
   fi
 
-  # Wait for current backup to complete (with 60 second timeout)
-  # This prevents incomplete backup archives from being uploaded to S3
+  # Wait for backup to complete
+  backup_timeout="${BACKUP_SHUTDOWN_TIMEOUT:-60}"
   if [ -n "$BACKUP_PID" ] && kill -0 "$BACKUP_PID" 2>/dev/null; then
-    echo "[primary] waiting for backup to complete (timeout 60s)..." >&2
-    timeout=60
-    while [ $timeout -gt 0 ] && kill -0 "$BACKUP_PID" 2>/dev/null; do
+    echo "[primary] waiting for backup to complete (timeout ${backup_timeout}s)..." >&2
+    while [ $backup_timeout -gt 0 ] && kill -0 "$BACKUP_PID" 2>/dev/null; do
       sleep 1
-      timeout=$((timeout - 1))
+      backup_timeout=$((backup_timeout - 1))
     done
     if kill -0 "$BACKUP_PID" 2>/dev/null; then
       echo "[primary] WARNING: backup timeout, forcing shutdown" >&2
@@ -34,8 +33,18 @@ cleanup() {
   fi
 
   # Stop Litestream
+  litestream_timeout="${LITESTREAM_SHUTDOWN_TIMEOUT:-30}"
   if [ -n "$LITESTREAM_PID" ] && kill -0 "$LITESTREAM_PID" 2>/dev/null; then
+    echo "[primary] stopping litestream (timeout ${litestream_timeout}s)..." >&2
     kill "$LITESTREAM_PID" 2>/dev/null || true
+    while [ $litestream_timeout -gt 0 ] && kill -0 "$LITESTREAM_PID" 2>/dev/null; do
+      sleep 1
+      litestream_timeout=$((litestream_timeout - 1))
+    done
+    if kill -0 "$LITESTREAM_PID" 2>/dev/null; then
+      echo "[primary] WARNING: litestream timeout, forcing kill" >&2
+      kill -9 "$LITESTREAM_PID" 2>/dev/null || true
+    fi
     wait "$LITESTREAM_PID" 2>/dev/null || true
   fi
 

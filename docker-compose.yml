@@ -5,7 +5,7 @@ services:
     image: ghcr.io/<your-user>/vaultwarden-stream:latest
     container_name: vaultwarden
     restart: unless-stopped
-    stop_grace_period: 30s
+    stop_grace_period: 120s
     env_file: .env
     volumes:
       - vaultwarden-data:/data

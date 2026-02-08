@@ -1,14 +1,9 @@
 #!/bin/sh
-# backup.sh — Periodic snapshot backup to S3 (and optional extra remotes)
-# Sourced by primary.sh
+# Periodic snapshot backup to S3
 
 set -eu
 
-# Clean up old backups on a given remote path.
-# Deletes files older than BACKUP_RETENTION_DAYS, but ensures at least
-# BACKUP_MIN_KEEP total backups remain. Recent backups (within retention
-# period) count toward the minimum, so if enough recent backups exist,
-# all old backups are removed.
+# Clean up old backups while maintaining minimum count
 cleanup_backups() {
   target="$1"
   retention_days="${BACKUP_RETENTION_DAYS:-30}"
@@ -36,12 +31,12 @@ cleanup_backups() {
   deleted=0
 
   if [ "$recent" -ge "$min_keep" ]; then
-    # Enough recent backups exist — safe to delete ALL old backups
+    # Delete all old backups
     for file in $old_files; do
       rclone_safe deletefile "${target}${file}" && deleted=$((deleted + 1)) || true
     done
   else
-    # Not enough recent backups — keep newest old ones as safety net
+    # Keep newest old backups to reach minimum count
     need_from_old=$((min_keep - recent))
     old_sorted=$(printf '%s\n' "$old_files" | sort -r)
     protected=$(printf '%s\n' "$old_sorted" | head -n "$need_from_old")
