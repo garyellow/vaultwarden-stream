@@ -16,9 +16,9 @@ require_var S3_PROVIDER
 require_var S3_ACCESS_KEY_ID
 require_var S3_SECRET_ACCESS_KEY
 
-: "${S3_REGION:=auto}"
+: "${S3_REGION:=}"
 : "${S3_PREFIX:=vaultwarden}"
-: "${S3_ACL:=private}"
+: "${S3_ACL:=}"
 : "${PRIMARY_SYNC_INTERVAL:=300}"
 : "${SECONDARY_SYNC_INTERVAL:=3600}"
 : "${DEPLOYMENT_MODE:=persistent}"
