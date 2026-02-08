@@ -27,6 +27,7 @@ Access at `http://localhost:8080`
 
 1. Create R2 bucket: [Cloudflare Dashboard](https://dash.cloudflare.com/) → R2 → Create bucket
 2. Generate API token: R2 → Manage R2 API Tokens → Create API Token
+   - Permission: **Object Read & Write**
 3. Note your Account ID (visible in R2 overview)
 
 </details>

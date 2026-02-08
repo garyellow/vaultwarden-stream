@@ -16,9 +16,10 @@ require_var S3_PROVIDER
 require_var S3_ACCESS_KEY_ID
 require_var S3_SECRET_ACCESS_KEY
 
-: "${S3_REGION:=}"
+: "${S3_REGION:=auto}"
 : "${S3_PREFIX:=vaultwarden}"
-: "${S3_ACL:=}"
+: "${S3_ACL:=private}"
+: "${S3_NO_CHECK_BUCKET:=true}"
 : "${PRIMARY_SYNC_INTERVAL:=300}"
 : "${SECONDARY_SYNC_INTERVAL:=3600}"
 : "${DEPLOYMENT_MODE:=persistent}"
@@ -27,7 +28,7 @@ require_var S3_SECRET_ACCESS_KEY
 # This ensures paths like "vaultwarden" and "/vaultwarden/" are normalized to "vaultwarden"
 S3_PREFIX=$(echo "$S3_PREFIX" | sed -e 's#^/*##' -e 's#/*$##' -e 's#//*#/#g')
 : "${LITESTREAM_REPLICA_PATH:=${S3_PREFIX}/db.sqlite3}"
-export S3_REGION S3_ACL S3_PREFIX LITESTREAM_REPLICA_PATH
+export S3_REGION S3_ACL S3_PREFIX S3_NO_CHECK_BUCKET LITESTREAM_REPLICA_PATH
 export PRIMARY_SYNC_INTERVAL SECONDARY_SYNC_INTERVAL DEPLOYMENT_MODE
 
 case "$PRIMARY_SYNC_INTERVAL" in
@@ -70,6 +71,7 @@ export "RCLONE_CONFIG_${remote}_SECRET_ACCESS_KEY=${S3_SECRET_ACCESS_KEY}"
 export "RCLONE_CONFIG_${remote}_ENDPOINT=${S3_ENDPOINT}"
 export "RCLONE_CONFIG_${remote}_REGION=${S3_REGION}"
 export "RCLONE_CONFIG_${remote}_ACL=${S3_ACL}"
+export "RCLONE_CONFIG_${remote}_NO_CHECK_BUCKET=${S3_NO_CHECK_BUCKET}"
 
 # Generate Litestream configuration from template
 # Substitutes environment variables like $S3_BUCKET, $S3_PREFIX, etc.
