@@ -1,26 +1,37 @@
+# Stage 1: Get Litestream binary from official image
+FROM litestream/litestream:latest AS litestream
+
+# Stage 2: Build final image
 FROM vaultwarden/server:latest
 
-# Install runtime dependencies and Litestream
+# OCI standard labels for better container metadata
+LABEL org.opencontainers.image.title="Vaultwarden Stream"
+LABEL org.opencontainers.image.description="Vaultwarden with automated S3 backup via Litestream and rclone"
+LABEL org.opencontainers.image.url="https://github.com/garyellow/vaultwarden-stream"
+LABEL org.opencontainers.image.source="https://github.com/garyellow/vaultwarden-stream"
+LABEL org.opencontainers.image.licenses="MIT"
+
+# Copy Litestream binary from official image
+COPY --from=litestream /usr/local/bin/litestream /usr/local/bin/litestream
+
+# Install runtime dependencies
 # - gettext-base: Provides envsubst for environment variable substitution in litestream.yml
 # - rclone: Syncs files (attachments, sends, RSA keys) to S3-compatible storage
 # - sqlite3: Provides online backup API for periodic database snapshots
-# - wget: Used during build to download Litestream binary (removed after installation)
 # Note: ca-certificates and curl are already included in the base Vaultwarden image
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         gettext-base \
         rclone \
-        sqlite3 \
-        wget && \
-    wget -qO- "https://github.com/benbjohnson/litestream/releases/latest/download/litestream-linux-$(dpkg --print-architecture).tar.gz" | \
-        tar -xz -C /usr/local/bin && \
-    apt-get purge -y wget && \
-    apt-get autoremove -y && \
-    rm -rf /var/lib/apt/lists/*
+        sqlite3 && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
-# Copy scripts and configuration
-COPY --chmod=0755 scripts/ /app/
+# Copy configuration template (less frequently changed)
 COPY config/litestream.yml.tpl /app/litestream.yml.tpl
+
+# Copy scripts (more frequently changed - better cache utilization)
+COPY --chmod=0755 scripts/ /app/
 
 # Default environment variables (all can be overridden at runtime via
 # docker run -e, docker-compose environment:, or .env files)
