@@ -5,6 +5,17 @@ SYNC_STATUS_FILE="/tmp/sync-status.json"
 MAX_SYNC_AGE="${HEALTHCHECK_SYNC_MAX_AGE:-600}"
 ROLE="${NODE_ROLE:-primary}"
 
+# Check if a process with given name is running
+process_running() {
+  process_name="$1"
+  for pid_dir in /proc/[0-9]*; do
+    if [ -f "$pid_dir/comm" ] && [ "$(cat "$pid_dir/comm" 2>/dev/null)" = "$process_name" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 # Check HTTP (both roles)
 if ! curl -sf -o /dev/null "http://127.0.0.1:${ROCKET_PORT:-80}/alive"; then
   echo "UNHEALTHY: vaultwarden HTTP check failed" >&2
@@ -13,7 +24,7 @@ fi
 
 # Check Litestream process (primary only)
 if [ "$ROLE" = "primary" ]; then
-  if ! pgrep -x litestream >/dev/null 2>&1; then
+  if ! process_running "litestream"; then
     echo "UNHEALTHY: litestream process not running" >&2
     exit 1
   fi
