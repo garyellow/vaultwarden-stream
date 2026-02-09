@@ -76,6 +76,17 @@ export "RCLONE_CONFIG_${remote}_NO_CHECK_BUCKET=${S3_NO_CHECK_BUCKET}"
 # Substitutes environment variables like $S3_BUCKET, $S3_PREFIX, etc.
 envsubst < /app/litestream.yml.tpl > /etc/litestream.yml
 
+# Validate backup schedule (if backup is enabled)
+if [ "${BACKUP_ENABLED:-false}" = "true" ]; then
+  : "${BACKUP_CRON:=0 0 * * *}"
+  cron_field_count=$(echo "$BACKUP_CRON" | awk '{print NF}')
+  if [ "$cron_field_count" -ne 5 ]; then
+    echo "[entrypoint] ERROR: BACKUP_CRON must be a 5-field cron expression (got ${cron_field_count} fields): ${BACKUP_CRON}" >&2
+    exit 1
+  fi
+  export BACKUP_CRON
+fi
+
 # Validate extra backup remotes (if backup is enabled)
 if [ "${BACKUP_ENABLED:-false}" = "true" ] && [ -n "${BACKUP_EXTRA_REMOTES:-}" ]; then
   echo "[entrypoint] validating extra backup remotes..." >&2
@@ -102,7 +113,7 @@ case "$role" in
     echo "[entrypoint] launching primary (vaultwarden + litestream + rclone upload)..." >&2
     echo "[entrypoint] S3: ${S3_PROVIDER} ${S3_BUCKET}/${S3_PREFIX}" >&2
     echo "[entrypoint] sync interval: ${PRIMARY_SYNC_INTERVAL}s" >&2
-    [ "${BACKUP_ENABLED:-false}" = "true" ] && echo "[entrypoint] backup interval: ${BACKUP_INTERVAL:-86400}s" >&2
+    [ "${BACKUP_ENABLED:-false}" = "true" ] && echo "[entrypoint] backup schedule: ${BACKUP_CRON}" >&2
     exec /app/primary.sh
     ;;
   secondary)

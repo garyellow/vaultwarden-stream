@@ -1,5 +1,5 @@
 #!/bin/sh
-# Periodic snapshot backup to S3
+# Scheduled snapshot backup to S3
 
 set -eu
 
@@ -12,7 +12,6 @@ cleanup_backups() {
   [ "$retention_days" -gt 0 ] 2>/dev/null || return 0
   [ "$min_keep" -gt 0 ] 2>/dev/null || return 0
 
-  # List all backup files (newest first by filename timestamp)
   all_backups=$(rclone_safe lsf "$target" 2>/dev/null | \
     grep "^vaultwarden-.*\.tar\.gz$" | sort -r || true)
 
@@ -53,7 +52,7 @@ cleanup_backups() {
   echo "[backup] cleanup ${target}: deleted ${deleted}, remaining ${remaining}" >&2
 }
 
-# Upload a local file to all extra remotes (best-effort, failures are warnings)
+# Upload a local file to all extra remotes
 upload_to_extra_remotes() {
   local_file="$1"
 
@@ -81,6 +80,59 @@ cleanup_extra_remotes() {
   done
 }
 
+# Check if a value matches a cron field expression
+cron_field_match() {
+  field="$1"
+  value="$2"
+
+  [ "$field" = "*" ] && return 0
+
+  remainder="$field"
+  while [ -n "$remainder" ]; do
+    case "$remainder" in
+      *,*) part="${remainder%%,*}"; remainder="${remainder#*,}" ;;
+      *)   part="$remainder"; remainder="" ;;
+    esac
+
+    case "$part" in
+      \*\/[0-9]*)
+        step="${part#\*/}"
+        [ "$((value % step))" -eq 0 ] && return 0
+        ;;
+      [0-9]*-[0-9]*\/[0-9]*)
+        range="${part%/*}"; step="${part##*/}"
+        start="${range%-*}"; end="${range#*-}"
+        [ "$value" -ge "$start" ] && [ "$value" -le "$end" ] && \
+          [ "$(( (value - start) % step ))" -eq 0 ] && return 0
+        ;;
+      [0-9]*-[0-9]*)
+        start="${part%-*}"; end="${part#*-}"
+        [ "$value" -ge "$start" ] && [ "$value" -le "$end" ] && return 0
+        ;;
+      *)
+        [ "$value" -eq "$part" ] 2>/dev/null && return 0
+        ;;
+    esac
+  done
+
+  return 1
+}
+
+# Check if current time matches cron expression (minute hour day month weekday)
+cron_matches_now() {
+  set -f; set -- $1; set +f
+  _cm="$1" _ch="$2" _cd="$3" _cM="$4" _cw="$5"
+
+  set -- $(date '+%M %H %d %m %w' | sed 's/\b0\+\([0-9]\)/\1/g')
+
+  cron_field_match "$_cm" "$1" || return 1
+  cron_field_match "$_ch" "$2" || return 1
+  cron_field_match "$_cd" "$3" || return 1
+  cron_field_match "$_cM" "$4" || return 1
+  cron_field_match "$_cw" "$5" || return 1
+  return 0
+}
+
 create_backup() {
   timestamp=$(date -u +%Y%m%d-%H%M%S)
   backup_dir="/tmp/vw-backup-${timestamp}"
@@ -89,8 +141,6 @@ create_backup() {
 
   mkdir -p "$backup_dir"
 
-  # Create database snapshot using sqlite3 .backup command
-  # This uses shared locks and is safe to run while Litestream is replicating
   if ! sqlite3 "$LITESTREAM_DB_PATH" ".backup '${backup_dir}/db.sqlite3'" 2>&1; then
     echo "[backup] ERROR: database snapshot failed" >&2
     rm -rf "$backup_dir"

@@ -9,7 +9,7 @@ Vaultwarden with automated S3 backup — real-time database replication via [Lit
 - **Fully stateless** — All data in S3, restored on startup
 - **Serverless ready** — Supports scale-to-zero deployments
 - **Disaster recovery** — Run standby instances on different platforms
-- **Optional snapshots** — Periodic full backups for migration/compliance
+- **Optional snapshots** — Scheduled full backups for migration/compliance
 
 ## Quick Start
 
@@ -52,8 +52,8 @@ Access at `http://localhost:8080`
 | `NODE_ROLE` | `primary` | `primary` (main) or `secondary` (DR standby) |
 | `DEPLOYMENT_MODE` | `persistent` | `persistent` (always-on) or `serverless` (scale-to-zero) |
 | `PRIMARY_SYNC_INTERVAL` | `300` | File upload interval (seconds) |
-| `BACKUP_ENABLED` | `false` | Enable periodic full backups |
-| `BACKUP_INTERVAL` | `86400` | Backup interval (seconds) |
+| `BACKUP_ENABLED` | `false` | Enable scheduled full backups |
+| `BACKUP_CRON` | `0 0 * * *` | Backup schedule ([cron expression](https://crontab.guru/)) |
 | `LITESTREAM_SYNC_INTERVAL` | `1s` | Database replication interval |
 
 See [.env.example](.env.example) for all options.
@@ -125,7 +125,7 @@ graph TB
 
     LS1 -->|~1s| S3DB
     RC1 -->|5min| S3FILES
-    FILES1 -.->|daily| S3BACKUP
+    FILES1 -.->|scheduled| S3BACKUP
 
     S3DB --> LS2
     S3FILES --> RC2
@@ -138,18 +138,20 @@ graph TB
 **Data Sync:**
 - **Database:** Continuous replication via Litestream (~1s latency)
 - **Files:** Periodic sync via rclone (5min interval)
-- **Snapshots:** Optional daily full backups
+- **Snapshots:** Optional scheduled full backups (cron-based)
 
 ## Snapshot Backups
 
-Create periodic full backups (database + all files) independent of real-time replication:
+Create scheduled full backups (database + all files) independent of real-time replication:
 
 ```bash
 BACKUP_ENABLED=true
-BACKUP_INTERVAL=86400  # Daily
+BACKUP_CRON=0 0 * * *  # Daily at 0:00 AM (uses TZ)
 BACKUP_RETENTION_DAYS=30  # Keep 30 days
 BACKUP_MIN_KEEP=3  # Always keep at least 3 backups
 ```
+
+Schedule uses [cron expressions](https://crontab.guru/) — supports daily, weekly, monthly, or custom intervals. Honors the `TZ` environment variable for timezone.
 
 **Retention:** Deletes old backups while always keeping minimum count. Useful for migration or compliance.
 

@@ -93,15 +93,20 @@ SYNC_PID=$!
 
 # Start background backup loop (if enabled)
 if [ "${BACKUP_ENABLED:-false}" = "true" ]; then
+  echo "[primary] backup schedule: ${BACKUP_CRON}" >&2
   (
-    # Run first backup immediately on startup, then continue with periodic schedule
-    if ! create_backup; then
-      echo "[primary] WARNING: initial backup failed" >&2
-    fi
+    last_run=""
     while true; do
-      sleep "${BACKUP_INTERVAL:-86400}"
-      if ! create_backup; then
-        echo "[primary] WARNING: backup failed" >&2
+      sleep 30
+      if cron_matches_now "$BACKUP_CRON"; then
+        mark=$(date +%Y%m%d%H%M)
+        if [ "$mark" != "$last_run" ]; then
+          last_run="$mark"
+          echo "[primary] backup triggered (${BACKUP_CRON})" >&2
+          if ! create_backup; then
+            echo "[primary] WARNING: backup failed" >&2
+          fi
+        fi
       fi
     done
   ) &
