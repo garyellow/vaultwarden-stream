@@ -7,7 +7,7 @@ Vaultwarden with automated S3 backup — real-time database replication via [Lit
 - **Real-time database replication** — SQLite WAL streamed to S3 via Litestream (~1s latency)
 - **Automatic file sync** — Attachments, sends, and RSA keys synced to S3 via rclone
 - **Disaster recovery** — Run standby secondary instances that restore from S3
-- **Snapshot backup** — Scheduled archives with retention and multi-destination support
+- **Scheduled backups** — Tar archives with retention and multi-destination support
 - **Monitoring integration** — HTTP ping notifications for backup and sync events
 - **Tailscale VPN** — Private mesh networking with Serve/Funnel; Headscale compatible
 
@@ -15,299 +15,110 @@ Vaultwarden with automated S3 backup — real-time database replication via [Lit
 
 ```bash
 cp .env.example .env
-# Edit .env: set S3_BUCKET, S3_ENDPOINT, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY
+# Edit .env: set S3_PROVIDER, S3_BUCKET, S3_ENDPOINT, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY
 
 docker compose up -d
 ```
 
-Access at `http://localhost:8080`. See [.env.example](.env.example) for all configuration options.
-
-## Configuration
-
-All configuration is via environment variables. See [.env.example](.env.example) for inline documentation.
-
-For Vaultwarden-specific configuration options, refer to the [Vaultwarden Wiki](https://github.com/dani-garcia/vaultwarden/wiki).
-
-### S3 Storage
-
-Used by Litestream (database replication) and rclone (file sync). All fields are required unless noted.
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `S3_PROVIDER` | `Cloudflare` | S3 provider ([rclone list](https://rclone.org/s3/#s3-provider)) |
-| `S3_BUCKET` | — | Bucket name |
-| `S3_ENDPOINT` | — | S3 endpoint URL |
-| `S3_ACCESS_KEY_ID` | — | Access key |
-| `S3_SECRET_ACCESS_KEY` | — | Secret key |
-| `S3_PREFIX` | `vaultwarden` | Path prefix inside the bucket |
-| `S3_REGION` | `auto` | S3 region |
-| `S3_ACL` | `private` | Object ACL |
-| `S3_NO_CHECK_BUCKET` | `true` | Skip bucket existence check |
-
-### Deployment
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `NODE_ROLE` | `primary` | `primary` (read/write) or `secondary` (read-only DR) |
-| `DEPLOYMENT_MODE` | `persistent` | `persistent` (always-on) or `serverless` (scale-to-zero) |
-| `PRIMARY_SYNC_INTERVAL` | `300` | File upload interval in seconds (primary only) |
-| `SECONDARY_SYNC_INTERVAL` | `3600` | Data refresh interval in seconds (secondary only) |
-| `RCLONE_REMOTE_NAME` | `S3` | rclone remote name |
-| `HEALTHCHECK_MAX_SYNC_AGE` | `600` | Max seconds since last sync before unhealthy |
-
-### Litestream (Database Replication)
-
-> **Documentation:** [Litestream Configuration Reference](https://litestream.io/reference/config/)
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `LITESTREAM_SYNC_INTERVAL` | `1s` | WAL replication interval (data loss window) |
-| `LITESTREAM_SNAPSHOT_INTERVAL` | `30m` | Full snapshot creation interval |
-| `LITESTREAM_RETENTION` | `24h` | Snapshot/WAL retention period |
-| `LITESTREAM_VALIDATION_INTERVAL` | — | Automatic replica validation interval (restores and verifies S3 data)<br>⚠️ **Currently non-functional in v0.5.x**. Leave empty. |
-| `LITESTREAM_DB_PATH` | `/data/db.sqlite3` | Local database file path |
-| `LITESTREAM_REPLICA_PATH` | `<S3_PREFIX>/db.sqlite3` | S3 replica path (auto-derived) |
-| `LITESTREAM_SHUTDOWN_TIMEOUT` | `30` | Seconds to flush WAL before forced shutdown |
-| `LITESTREAM_FORCE_PATH_STYLE` | `false` | Path-style S3 URLs (required for MinIO, Ceph) |
-| `LITESTREAM_SKIP_VERIFY` | `false` | Skip TLS certificate verification |
-
-### Backup (Optional)
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `BACKUP_ENABLED` | `false` | Enable scheduled backups |
-| `BACKUP_CRON` | `0 0 * * *` | Cron schedule ([editor](https://crontab.guru/)) |
-| `BACKUP_FORMAT` | `tar.gz` | `tar.gz` (compressed, supports encryption) or `tar` (uncompressed, faster) |
-| `BACKUP_PASSWORD` | — | Encryption password (requires `tar.gz` format) |
-| `BACKUP_REMOTES` | — | Remote destinations, comma-separated |
-| `BACKUP_RETENTION_DAYS` | `30` | Delete backups older than N days |
-| `BACKUP_MIN_KEEP` | `3` | Always keep at least N recent backups |
-| `BACKUP_INCLUDE_ATTACHMENTS` | `true` | Include attachments |
-| `BACKUP_INCLUDE_SENDS` | `true` | Include sends |
-| `BACKUP_INCLUDE_CONFIG` | `true` | Include RSA keys and config.json |
-| `BACKUP_INCLUDE_ICON_CACHE` | `false` | Include icon cache (icons can be re-fetched, but backup speeds up recovery) |
-| `BACKUP_ON_STARTUP` | `false` | Run backup immediately on startup (in addition to scheduled backups) |
-| `BACKUP_SHUTDOWN_TIMEOUT` | `60` | Seconds to wait for in-progress backup |
-
-### Notifications (Optional)
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `NOTIFICATION_URL` | — | HTTP ping URL for monitoring events<br>Compatible with [Healthchecks.io](https://healthchecks.io/), [Cronitor](https://cronitor.io/), [UptimeRobot](https://uptimerobot.com/), etc. |
-| `NOTIFICATION_EVENTS` | — | Events to notify (comma-separated):<br>`backup_success`, `backup_failure`, `sync_error`<br>Leave empty to notify on all events |
-| `NOTIFICATION_TIMEOUT` | `10` | curl timeout in seconds for notification requests |
-
-### Advanced
-
-> **rclone documentation:** [Rclone Docs](https://rclone.org/docs/)
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `RCLONE_FLAGS` | — | Additional rclone flags for all operations<br>Example: `--transfers 16 --checkers 32`<br>Use with caution |
-
-### Tailscale (Optional)
-
-> **Documentation:** [Tailscale CLI Reference](https://tailscale.com/kb/1080/cli)
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `TAILSCALE_ENABLED` | `false` | Enable Tailscale mesh VPN |
-| `TAILSCALE_AUTHKEY` | — | Auth key for node registration |
-| `TAILSCALE_HOSTNAME` | `vaultwarden` | Node hostname on the tailnet |
-| `TAILSCALE_STATE_DIR` | `/var/lib/tailscale` | Persistent state directory |
-| `TAILSCALE_LOGIN_SERVER` | — | Custom control server URL (for [Headscale](https://github.com/juanfont/headscale)) |
-| `TAILSCALE_SERVE_PORT` | `80` | Local port to expose via Tailscale Serve |
-| `TAILSCALE_SERVE_MODE` | `https` | Serve protocol (`https`, `tls-terminated-tcp`) |
-| `TAILSCALE_FUNNEL` | `false` | Expose to the **public internet** via Tailscale Funnel |
-| `TAILSCALE_EXTRA_ARGS` | — | Additional `tailscale up` flags |
-
-## Deployment Modes
-
-| Mode | Description | Best For |
-|------|-------------|----------|
-| `primary` + `persistent` | Always-on main instance | **Recommended for most users** |
-| `primary` + `serverless` | Scales to zero when idle | Low-traffic deployments |
-| `secondary` + `persistent` | Always-on read-only DR standby | High availability |
-| `secondary` + `serverless` | On-demand read-only DR standby | Cost-optimized DR |
-
-### Serverless
-
-For scale-to-zero platforms, set `DEPLOYMENT_MODE=serverless`. Requirements:
-- `max-instances: 1` (SQLite requires single writer)
-- `stop_grace_period: 120s`
-- `ENABLE_WEBSOCKET=false` (allows scale-to-zero)
-- `BACKUP_ENABLED=false` (cron prevents scale-to-zero)
+Access at `http://localhost:8080`. See [.env.example](.env.example) for all configuration options and [environment.md](environment.md) for detailed documentation.
 
 ## Architecture
 
 ```mermaid
 graph TB
-    subgraph PRIMARY["PRIMARY"]
+    subgraph PRIMARY["PRIMARY (Read/Write)"]
         VW1[Vaultwarden]
-        DB1[(Database)]
+        DB1[(Local Database)]
+        FILES1[(Local Files)]
         LS1[Litestream]
-        FILES1[Files]
         RC1[rclone]
-        TS1[Tailscale<br/>optional]
+        BACKUP1[backup.sh]
+        TS1["Tailscale<br/>(optional)"]
 
-        VW1 -->|writes| DB1
-        DB1 -->|WAL| LS1
-        FILES1 --> RC1
-        TS1 -.->|private net| VW1
+        VW1 <-->|read/write| DB1
+        VW1 <-->|read/write| FILES1
+        DB1 -->|WAL stream| LS1
+        FILES1 -->|scan| RC1
+        DB1 -.->|snapshot| BACKUP1
+        FILES1 -.->|archive| BACKUP1
+        TS1 -.->|mesh VPN| VW1
     end
 
     subgraph S3["S3 STORAGE"]
-        S3DB[(Database)]
-        S3FILES[(Files)]
-        S3BACKUP[("Snapshots<br/>(optional)")]
+        S3DB[(Database Replica<br/>WAL + Snapshots)]
+        S3FILES[(Files<br/>attachments/sends/config)]
+        S3BACKUP[("Archive Snapshots<br/>(optional)")]
     end
 
-    subgraph SECONDARY["SECONDARY (DR)"]
-        LS2[Litestream]
-        DB2[(Database)]
+    subgraph SECONDARY["SECONDARY (Read-Only DR)"]
         VW2[Vaultwarden]
+        DB2[(Local Database)]
+        FILES2[(Local Files)]
+        LS2[Litestream]
         RC2[rclone]
-        FILES2[Files]
 
-        LS2 --> DB2
-        DB2 --> VW2
-        RC2 --> FILES2
+        DB2 -->|read| VW2
+        FILES2 -->|read| VW2
+        LS2 -->|restore| DB2
+        RC2 -->|download| FILES2
     end
 
-    LS1 -->|~1s| S3DB
-    RC1 -->|5min| S3FILES
-    FILES1 -.->|scheduled| S3BACKUP
+    LS1 -->|replicate ~1s| S3DB
+    RC1 -->|upload 5min| S3FILES
+    BACKUP1 -.->|upload| S3BACKUP
 
-    S3DB --> LS2
-    S3FILES --> RC2
+    S3DB -->|restore/sync| LS2
+    S3FILES -->|sync| RC2
+    S3DB -.->|init restore| LS1
+    S3FILES -.->|init download| RC1
 
-    style PRIMARY fill:#e1f5fe
-    style SECONDARY fill:#fff3e0
+    style PRIMARY fill:#e3f2fd
+    style SECONDARY fill:#fff8e1
     style S3 fill:#f3e5f5
+    style VW1 fill:#1976d2,color:#fff
+    style VW2 fill:#f57c00,color:#fff
 ```
 
-**Data Sync:**
-- **Database:** Continuous WAL replication via Litestream (~1s latency)
-- **Files:** Periodic sync via rclone (configurable interval, default 5min)
-- **Snapshots:** Optional scheduled full backups (cron-based)
+### Data Flow
 
-## Tailscale
+**Primary instance**
+- Vaultwarden reads/writes local database and files
+- Litestream streams WAL to S3 (~1s latency)
+- rclone uploads files to S3 every 5 minutes (default)
+- Optional: scheduled backups via cron
+- On startup: restores from S3 if data exists
 
-Embedded Tailscale uses userspace networking — no `NET_ADMIN` or `/dev/net/tun` required.
+**Secondary instance (disaster recovery)**
+- On startup: restores database and files from S3
+- Vaultwarden runs in read-only mode
+- Persistent mode: syncs from S3 every hour (default)
+- Serverless mode: fetches latest state on each cold start
 
-```bash
-# Basic — private tailnet access
-TAILSCALE_ENABLED=true
-TAILSCALE_AUTHKEY=tskey-auth-xxxxx
-
-# HTTPS via Serve (auto TLS)
-TAILSCALE_SERVE_PORT=80
-# → https://vaultwarden.<tailnet>.ts.net
-
-# Public via Funnel (requires ACL policy)
-TAILSCALE_FUNNEL=true
-
-# Self-hosted with Headscale
-TAILSCALE_LOGIN_SERVER=https://headscale.example.com
-```
-
-Mount a volume at `TAILSCALE_STATE_DIR` to persist state across restarts.
-
-## Snapshot Backups
-
-Scheduled archives (database + attachments + config), independent of real-time replication. Archives reduce R2 operation costs vs uploading individual files.
-
-```bash
-BACKUP_ENABLED=true
-BACKUP_CRON=0 0 * * *
-BACKUP_RETENTION_DAYS=30
-BACKUP_REMOTES=S3:my-bucket/vw-backups
-
-# Optional
-BACKUP_PASSWORD=secret        # Encryption
-BACKUP_FORMAT=tar             # Uncompressed (faster)
-```
-
-### Multi-Destination
-
-Replicate to additional remotes ([rclone docs](https://rclone.org/docs/#configure-remotes-with-environment-variables)):
-
-```bash
-RCLONE_CONFIG_GDRIVE_TYPE=drive
-RCLONE_CONFIG_GDRIVE_TOKEN={"access_token":"...", "refresh_token":"..."}
-BACKUP_REMOTES=S3:my-bucket/vw-backups, GDRIVE:vw-backup
-```
-
-### Backup on Startup
-
-Run an immediate backup when the container starts (useful for testing or ensuring fresh deployments are backed up):
-
-```bash
-BACKUP_ENABLED=true
-BACKUP_ON_STARTUP=true
-BACKUP_REMOTES=S3:my-bucket/vw-backups
-```
-
-### Notifications
-
-Monitor backup and sync operations with HTTP ping notifications. Compatible with **Healthchecks.io**, **Cronitor**, **UptimeRobot**, and custom webhook services.
-
-```bash
-# Healthchecks.io example
-NOTIFICATION_URL=https://hc-ping.com/your-uuid-here
-NOTIFICATION_EVENTS=backup_success,backup_failure,sync_error
-```
-
-**Notification endpoints:**
-- **Success**: `GET $NOTIFICATION_URL` (backup_success)
-- **Failure**: `GET $NOTIFICATION_URL/fail` (backup_failure, sync_error)
-
-**Supported events:**
-- `backup_success` — Scheduled backup completed successfully
-- `backup_failure` — Scheduled backup failed
-- `sync_error` — File sync operation failed (primary upload or secondary download)
-
-### Advanced rclone Configuration
-
-Tune rclone performance for large vaults:
-
-```bash
-RCLONE_FLAGS=--transfers 16 --checkers 32 --buffer-size 32M
-```
-
-See [rclone docs](https://rclone.org/docs/) for all available flags.
-
-### Restore from Snapshot
-
-```bash
-# tar.gz (compressed)
-tar -xzf vaultwarden-*.tar.gz -C /data
-
-# tar (uncompressed)
-tar -xf vaultwarden-*.tar -C /data
-
-# Encrypted (will prompt for password)
-openssl enc -d -aes-256-cbc -pbkdf2 -in vaultwarden-*.tar.gz.enc | tar -xz -C /data
-```
+**S3 storage**
+- Database: WAL stream + snapshots (managed by Litestream)
+- Files: attachments, sends, RSA keys, config.json, icon_cache
+- Backups: optional encrypted tar archives
 
 ## Disaster Recovery
 
-If primary is unavailable, point clients to the secondary instance. Login sessions are preserved (RSA keys synced).
+If primary fails, redirect clients to secondary. Login sessions are preserved.
 
-Data freshness on secondary:
-- **Persistent:** Within `SECONDARY_SYNC_INTERVAL` (default: 1 hour)
-- **Serverless:** Latest S3 state at cold start
+**Secondary data freshness:**
+- Persistent: within sync interval (default: 1 hour)
+- Serverless: latest S3 state
 
-> **Never run two primary instances simultaneously** — SQLite supports only one writer.
+> **Warning:** Never run two primary instances simultaneously — SQLite supports only one writer.
 
 ## Data Safety
 
 | Event | Data Loss |
 |-------|-----------|
 | Graceful shutdown | None |
-| Crash (SIGKILL) | Up to `LITESTREAM_SYNC_INTERVAL` (default: 1s) |
+| Crash (SIGKILL) | Up to sync interval (default: 1s) |
 
-Set `stop_grace_period ≥ 120s` and enable S3 bucket versioning for accidental deletion protection.
+Best practices:
+- Set `stop_grace_period: 120s` in docker-compose.yml
+- Enable S3 bucket versioning for deletion protection
 
 ## Troubleshooting
 

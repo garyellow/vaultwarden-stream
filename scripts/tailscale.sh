@@ -17,21 +17,33 @@ tailscale_start() {
     return 1
   fi
 
-  state_dir="${TAILSCALE_STATE_DIR:-/var/lib/tailscale}"
-  mkdir -p "$state_dir"
+  # Append ephemeral=true to OAuth keys to be explicit
+  authkey="${TAILSCALE_AUTHKEY}"
+  case "$authkey" in
+    tskey-client-*)
+      case "$authkey" in
+        *ephemeral=*) ;;
+        *"?"*) authkey="${authkey}&ephemeral=true" ;;
+        *)     authkey="${authkey}?ephemeral=true" ;;
+      esac
+      ;;
+  esac
 
-  echo "[tailscale] starting tailscaled (userspace networking)..." >&2
-  tailscaled --tun=userspace-networking --statedir="$state_dir" >>/tmp/tailscaled.log 2>&1 &
+  echo "[tailscale] starting tailscaled (userspace networking, ephemeral)..." >&2
+  tailscaled --tun=userspace-networking --state=mem: >>/tmp/tailscaled.log 2>&1 &
   echo "$!" > "$TAILSCALED_PID_FILE"
 
   # Build a safe argv list for "tailscale up".
-  set -- up "--authkey=${TAILSCALE_AUTHKEY}"
+  set -- up "--authkey=${authkey}"
   if [ -n "${TAILSCALE_HOSTNAME:-}" ]; then
     set -- "$@" "--hostname=${TAILSCALE_HOSTNAME}"
   fi
   if [ -n "${TAILSCALE_LOGIN_SERVER:-}" ]; then
     echo "[tailscale] using custom control server: ${TAILSCALE_LOGIN_SERVER}" >&2
     set -- "$@" "--login-server=${TAILSCALE_LOGIN_SERVER}"
+  fi
+  if [ -n "${TAILSCALE_TAGS:-}" ]; then
+    set -- "$@" "--advertise-tags=${TAILSCALE_TAGS}"
   fi
   if [ -n "${TAILSCALE_EXTRA_ARGS:-}" ]; then
     # Allow advanced users to pass additional args (word-splitting is intentional here).

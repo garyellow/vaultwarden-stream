@@ -38,22 +38,12 @@ require_var S3_ENDPOINT
 require_var S3_ACCESS_KEY_ID
 require_var S3_SECRET_ACCESS_KEY
 
-: "${S3_PREFIX:=vaultwarden}"
-: "${S3_REGION:=auto}"
-: "${S3_ACL:=private}"
-: "${S3_NO_CHECK_BUCKET:=true}"
-
 # Normalize S3_PREFIX (strip leading/trailing/duplicate slashes)
 S3_PREFIX=$(echo "$S3_PREFIX" | sed -e 's#^/*##' -e 's#/*$##' -e 's#//*#/#g')
 
 export S3_PREFIX S3_REGION S3_ACL S3_NO_CHECK_BUCKET
 
 # ── Deployment validation ─────────────────────────────────────────────────
-
-: "${NODE_ROLE:=primary}"
-: "${DEPLOYMENT_MODE:=persistent}"
-: "${PRIMARY_SYNC_INTERVAL:=300}"
-: "${SECONDARY_SYNC_INTERVAL:=3600}"
 
 case "$NODE_ROLE" in
   primary|secondary) ;;
@@ -76,43 +66,27 @@ validate_integer SECONDARY_SYNC_INTERVAL "$SECONDARY_SYNC_INTERVAL"
 
 export NODE_ROLE DEPLOYMENT_MODE PRIMARY_SYNC_INTERVAL SECONDARY_SYNC_INTERVAL
 
-# ── Litestream defaults ───────────────────────────────────────────────────
+# ── Litestream configuration ──────────────────────────────────────────────
 
-: "${LITESTREAM_DB_PATH:=/data/db.sqlite3}"
-: "${LITESTREAM_SYNC_INTERVAL:=1s}"
-: "${LITESTREAM_SNAPSHOT_INTERVAL:=30m}"
-: "${LITESTREAM_RETENTION:=24h}"
-
+# Compute LITESTREAM_REPLICA_PATH from S3_PREFIX (if not already set)
 if [ -n "${S3_PREFIX}" ]; then
   : "${LITESTREAM_REPLICA_PATH:=${S3_PREFIX}/db.sqlite3}"
 else
   : "${LITESTREAM_REPLICA_PATH:=db.sqlite3}"
 fi
 
-: "${LITESTREAM_FORCE_PATH_STYLE:=false}"
-: "${LITESTREAM_SKIP_VERIFY:=false}"
-
-export LITESTREAM_DB_PATH LITESTREAM_SYNC_INTERVAL LITESTREAM_SNAPSHOT_INTERVAL
-export LITESTREAM_RETENTION LITESTREAM_REPLICA_PATH
-
 validate_boolean LITESTREAM_FORCE_PATH_STYLE "$LITESTREAM_FORCE_PATH_STYLE"
 validate_boolean LITESTREAM_SKIP_VERIFY "$LITESTREAM_SKIP_VERIFY"
-export LITESTREAM_FORCE_PATH_STYLE LITESTREAM_SKIP_VERIFY
-
-: "${LITESTREAM_VALIDATION_INTERVAL:=}"
-export LITESTREAM_VALIDATION_INTERVAL
-
-: "${LITESTREAM_SHUTDOWN_TIMEOUT:=30}"
 validate_integer LITESTREAM_SHUTDOWN_TIMEOUT "$LITESTREAM_SHUTDOWN_TIMEOUT"
-export LITESTREAM_SHUTDOWN_TIMEOUT
-
-: "${HEALTHCHECK_MAX_SYNC_AGE:=600}"
 validate_integer HEALTHCHECK_MAX_SYNC_AGE "$HEALTHCHECK_MAX_SYNC_AGE"
+
+export LITESTREAM_DB_PATH LITESTREAM_SYNC_INTERVAL LITESTREAM_SNAPSHOT_INTERVAL
+export LITESTREAM_RETENTION LITESTREAM_REPLICA_PATH LITESTREAM_VALIDATION_INTERVAL
+export LITESTREAM_SHUTDOWN_TIMEOUT LITESTREAM_FORCE_PATH_STYLE LITESTREAM_SKIP_VERIFY
 export HEALTHCHECK_MAX_SYNC_AGE
 
 # ── rclone configuration ─────────────────────────────────────────────────
 
-: "${RCLONE_REMOTE_NAME:=S3}"
 case "$RCLONE_REMOTE_NAME" in
   *[!A-Za-z0-9_]*)
     echo "[entrypoint] ERROR: RCLONE_REMOTE_NAME must contain only letters, digits, and underscores" >&2
@@ -143,7 +117,6 @@ mv "$tmp_litestream_yml" /etc/litestream.yml
 # ── Backup validation ─────────────────────────────────────────────────────
 
 if [ "${BACKUP_ENABLED:-false}" = "true" ]; then
-  : "${BACKUP_CRON:=0 0 * * *}"
   cron_field_count=$(echo "$BACKUP_CRON" | awk '{print NF}')
   if [ "$cron_field_count" -ne 5 ]; then
     echo "[entrypoint] ERROR: BACKUP_CRON must be a 5-field cron expression (got ${cron_field_count} fields): ${BACKUP_CRON}" >&2
@@ -152,26 +125,18 @@ if [ "${BACKUP_ENABLED:-false}" = "true" ]; then
   export BACKUP_CRON
 
   # Validate BACKUP_INCLUDE_* flags
-  for flag in BACKUP_INCLUDE_ATTACHMENTS BACKUP_INCLUDE_SENDS BACKUP_INCLUDE_CONFIG; do
-    eval "val=\${${flag}:-true}"
+  for flag in BACKUP_INCLUDE_ATTACHMENTS BACKUP_INCLUDE_SENDS BACKUP_INCLUDE_CONFIG BACKUP_INCLUDE_ICON_CACHE; do
+    eval "val=\${${flag}}"
     validate_boolean "$flag" "$val"
     export "$flag=$val"
   done
-  # Icon cache defaults to false (icons are re-fetchable)
-  val="${BACKUP_INCLUDE_ICON_CACHE:-false}"
-  validate_boolean BACKUP_INCLUDE_ICON_CACHE "$val"
-  export "BACKUP_INCLUDE_ICON_CACHE=$val"
 
-  : "${BACKUP_RETENTION_DAYS:=30}"
-  : "${BACKUP_MIN_KEEP:=3}"
-  : "${BACKUP_SHUTDOWN_TIMEOUT:=60}"
   validate_integer BACKUP_RETENTION_DAYS "$BACKUP_RETENTION_DAYS"
   validate_integer BACKUP_MIN_KEEP "$BACKUP_MIN_KEEP"
   validate_integer BACKUP_SHUTDOWN_TIMEOUT "$BACKUP_SHUTDOWN_TIMEOUT"
   export BACKUP_RETENTION_DAYS BACKUP_MIN_KEEP BACKUP_SHUTDOWN_TIMEOUT
 
   # Validate backup format
-  : "${BACKUP_FORMAT:=tar.gz}"
   case "$BACKUP_FORMAT" in
     tar.gz|tar) ;;
     *)
@@ -182,7 +147,6 @@ if [ "${BACKUP_ENABLED:-false}" = "true" ]; then
   export BACKUP_FORMAT
 
   # Validate BACKUP_ON_STARTUP
-  : "${BACKUP_ON_STARTUP:=false}"
   validate_boolean BACKUP_ON_STARTUP "$BACKUP_ON_STARTUP"
   export BACKUP_ON_STARTUP
 
@@ -238,8 +202,6 @@ fi
 # ── Notification validation ─────────────────────────────────────────
 
 if [ -n "${NOTIFICATION_URL:-}" ]; then
-  : "${NOTIFICATION_EVENTS:=}"
-  : "${NOTIFICATION_TIMEOUT:=10}"
   validate_integer NOTIFICATION_TIMEOUT "$NOTIFICATION_TIMEOUT"
   if [ -n "$NOTIFICATION_EVENTS" ]; then
     NOTIFICATION_EVENTS=$(echo "$NOTIFICATION_EVENTS" | tr -d '[:space:]')
@@ -280,6 +242,26 @@ if [ "${TAILSCALE_ENABLED:-false}" = "true" ]; then
         exit 1
         ;;
     esac
+  fi
+
+  if [ -n "${TAILSCALE_TAGS:-}" ]; then
+    # Strip spaces around commas and validate each tag starts with "tag:"
+    TAILSCALE_TAGS=$(echo "$TAILSCALE_TAGS" | tr -d '[:space:]')
+    _tags_remaining="$TAILSCALE_TAGS"
+    while [ -n "$_tags_remaining" ]; do
+      case "$_tags_remaining" in
+        *,*) _tag="${_tags_remaining%%,*}"; _tags_remaining="${_tags_remaining#*,}" ;;
+        *)   _tag="$_tags_remaining"; _tags_remaining="" ;;
+      esac
+      case "$_tag" in
+        tag:*) ;;
+        *)
+          echo "[entrypoint] ERROR: TAILSCALE_TAGS entries must start with 'tag:' (got: $_tag)" >&2
+          exit 1
+          ;;
+      esac
+    done
+    export TAILSCALE_TAGS
   fi
 
   if [ -n "${TAILSCALE_FUNNEL:-}" ]; then
