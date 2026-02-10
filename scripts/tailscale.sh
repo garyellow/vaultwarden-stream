@@ -17,20 +17,10 @@ tailscale_start() {
     return 1
   fi
 
-  # Append ephemeral=true to OAuth keys to be explicit
   authkey="${TAILSCALE_AUTHKEY}"
-  case "$authkey" in
-    tskey-client-*)
-      case "$authkey" in
-        *ephemeral=*) ;;
-        *"?"*) authkey="${authkey}&ephemeral=true" ;;
-        *)     authkey="${authkey}?ephemeral=true" ;;
-      esac
-      ;;
-  esac
 
-  echo "[tailscale] starting tailscaled (userspace networking, ephemeral)..." >&2
-  tailscaled --tun=userspace-networking --state=mem: >>/tmp/tailscaled.log 2>&1 &
+  echo "[tailscale] starting tailscaled (userspace networking)..." >&2
+  tailscaled --tun=userspace-networking >>/tmp/tailscaled.log 2>&1 &
   echo "$!" > "$TAILSCALED_PID_FILE"
 
   # Build a safe argv list for "tailscale up".
