@@ -26,6 +26,8 @@ Access at `http://localhost:8080`. See [.env.example](.env.example) for all conf
 
 All configuration is via environment variables. See [.env.example](.env.example) for inline documentation.
 
+For Vaultwarden-specific configuration options, refer to the [Vaultwarden Wiki](https://github.com/dani-garcia/vaultwarden/wiki).
+
 ### S3 Storage
 
 Used by Litestream (database replication) and rclone (file sync). All fields are required unless noted.
@@ -54,6 +56,8 @@ Used by Litestream (database replication) and rclone (file sync). All fields are
 | `HEALTHCHECK_MAX_SYNC_AGE` | `600` | Max seconds since last sync before unhealthy |
 
 ### Litestream (Database Replication)
+
+> **Documentation:** [Litestream Configuration Reference](https://litestream.io/reference/config/)
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -95,11 +99,15 @@ Used by Litestream (database replication) and rclone (file sync). All fields are
 
 ### Advanced
 
+> **rclone documentation:** [Rclone Docs](https://rclone.org/docs/)
+
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `RCLONE_FLAGS` | — | Additional rclone flags for all operations<br>Example: `--transfers 16 --checkers 32`<br>Use with caution |
 
 ### Tailscale (Optional)
+
+> **Documentation:** [Tailscale CLI Reference](https://tailscale.com/kb/1080/cli)
 
 | Variable | Default | Description |
 |----------|---------|-------------|
