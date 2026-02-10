@@ -181,4 +181,4 @@ TAILSCALE_FUNNEL=true
 TAILSCALE_LOGIN_SERVER=https://headscale.example.com
 ```
 
-OAuth client secrets (`tskey-client-*`) are ephemeral by default — removed on container stop.
+Containers execute `tailscale logout` on shutdown to ensure consistent DNS URLs.

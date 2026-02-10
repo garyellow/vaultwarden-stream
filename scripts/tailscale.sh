@@ -98,7 +98,7 @@ tailscale_stop() {
   echo "[tailscale] shutting down..." >&2
   tailscale funnel off 2>/dev/null || true
   tailscale serve off 2>/dev/null || true
-  tailscale down 2>/dev/null || true
+  tailscale logout 2>/dev/null || true
 
   if [ -f "$TAILSCALED_PID_FILE" ]; then
     pid=$(cat "$TAILSCALED_PID_FILE")
