@@ -48,6 +48,8 @@ For scale-to-zero platforms, set `DEPLOYMENT_MODE=serverless`. Requirements:
 - `ENABLE_WEBSOCKET=false` (allows scale-to-zero)
 - `BACKUP_ENABLED=false` (cron prevents scale-to-zero)
 
+**Note:** This image sets `I_REALLY_WANT_VOLATILE_STORAGE=true` by default. This is a Vaultwarden safety flag that allows running without persistent volumes. Since all data is replicated to S3 via Litestream and rclone, volatile local storage is acceptable and expected in serverless deployments.
+
 ## Litestream (Database Replication)
 
 > **Documentation:** [Litestream Configuration Reference](https://litestream.io/reference/config/)

@@ -82,6 +82,8 @@ ENV TAILSCALE_ENABLED=false \
 
 ENV HEALTHCHECK_MAX_SYNC_AGE=600
 
+ENV I_REALLY_WANT_VOLATILE_STORAGE=true
+
 HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
   CMD /app/healthcheck.sh
 
