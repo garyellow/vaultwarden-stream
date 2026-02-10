@@ -2,7 +2,7 @@
 set -eu
 
 SYNC_STATUS_FILE="/tmp/sync-status.json"
-MAX_SYNC_AGE="${HEALTHCHECK_SYNC_MAX_AGE:-600}"
+MAX_SYNC_AGE="${HEALTHCHECK_MAX_SYNC_AGE:-600}"
 ROLE="${NODE_ROLE:-primary}"
 
 # Check if a process with given name is running
@@ -16,7 +16,7 @@ process_running() {
   return 1
 }
 
-# Check HTTP (both roles)
+# Check Vaultwarden HTTP endpoint (both roles)
 if ! curl -sf -o /dev/null "http://127.0.0.1:${ROCKET_PORT:-80}/alive"; then
   echo "UNHEALTHY: vaultwarden HTTP check failed" >&2
   exit 1
@@ -26,6 +26,14 @@ fi
 if [ "$ROLE" = "primary" ]; then
   if ! process_running "litestream"; then
     echo "UNHEALTHY: litestream process not running" >&2
+    exit 1
+  fi
+fi
+
+# Check Tailscale connectivity (if enabled)
+if [ "${TAILSCALE_ENABLED:-false}" = "true" ]; then
+  if ! tailscale status >/dev/null 2>&1; then
+    echo "UNHEALTHY: tailscale not connected" >&2
     exit 1
   fi
 fi

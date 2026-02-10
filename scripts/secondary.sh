@@ -2,6 +2,7 @@
 set -eu
 
 . /app/sync.sh
+. /app/tailscale.sh
 
 VW_PID=""
 STOP_REQUESTED=""
@@ -43,6 +44,7 @@ cleanup() {
   echo "[secondary] shutdown signal received, cleaning up..." >&2
   STOP_REQUESTED=1
   stop_vaultwarden
+  tailscale_stop
   write_sync_status "shutdown"
   exit 0
 }
@@ -70,9 +72,9 @@ write_sync_status "ok"
 
 # ── Start Vaultwarden ───────────────────────────────────────────
 if [ "$DEPLOYMENT_MODE" = "serverless" ]; then
-  echo "[secondary] starting vaultwarden (serverless DR — no periodic refresh)..." >&2
+  echo "[secondary] starting vaultwarden (serverless DR — no periodic refresh)" >&2
 else
-  echo "[secondary] starting vaultwarden (persistent DR — refresh every ${SECONDARY_SYNC_INTERVAL}s)..." >&2
+  echo "[secondary] starting vaultwarden (persistent DR — refresh every ${SECONDARY_SYNC_INTERVAL}s)" >&2
 fi
 start_vaultwarden
 
@@ -135,6 +137,7 @@ while [ -z "$STOP_REQUESTED" ]; do
       else
         write_sync_status "error"
         echo "[secondary] WARNING: refresh failed" >&2
+        send_notification "sync_error" "/fail"
       fi
     fi
   fi

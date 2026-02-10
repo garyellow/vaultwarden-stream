@@ -3,11 +3,39 @@ set -eu
 
 SYNC_STATUS_FILE="/tmp/sync-status.json"
 
+# ── Notification helper ─────────────────────────────────────────────
+
+# Send notification if URL is configured and event is enabled
+# Usage: send_notification <event_name> [url_suffix]
+send_notification() {
+  event="$1"
+  suffix="${2:-}"
+
+  [ -z "${NOTIFICATION_URL:-}" ] && return 0
+
+  # If specific events are configured, check this event is in the list
+  if [ -n "${NOTIFICATION_EVENTS:-}" ]; then
+    events=$(echo "${NOTIFICATION_EVENTS}" | tr -d '[:space:]')
+    echo ",${events}," | grep -q ",${event}," || return 0
+  fi
+
+  url="${NOTIFICATION_URL}${suffix}"
+  timeout="${NOTIFICATION_TIMEOUT:-10}"
+
+  # Best-effort: notification failure must never affect process lifecycle
+  curl -fsS -m "$timeout" "$url" >/dev/null 2>&1 || \
+    echo "[notification] WARNING: failed to send ${event} notification" >&2
+  return 0
+}
+
+# ── Status tracking ────────────────────────────────────────────────
+
 remote_base() {
   echo "${RCLONE_REMOTE_NAME}:${S3_BUCKET}/${S3_PREFIX}"
 }
 
 rclone_safe() {
+  # shellcheck disable=SC2086  # intentional word splitting for multiple flags
   rclone ${RCLONE_FLAGS:-} "$@"
 }
 
@@ -25,14 +53,31 @@ write_sync_status() {
 EOF
 }
 
-# Sync Vaultwarden core files (RSA keys, config)
-sync_core_files() {
-  src="$1"
-  dst="$2"
-  for file in rsa_key.pem rsa_key.pub.pem config.json; do
-    if [ -f "${src}/${file}" ]; then
-      if ! rclone_safe copy "${src}/${file}" "${dst}/" 2>/dev/null; then
+CORE_FILES="rsa_key.pem rsa_key.pub.pem rsa_key.der rsa_key.pub.der config.json"
+
+# ── Core files ──────────────────────────────────────────────────
+
+# Upload core files from local directory to remote
+upload_core_files() {
+  dst="$1"
+  for file in $CORE_FILES; do
+    if [ -f "/data/${file}" ]; then
+      if ! rclone_safe copy "/data/${file}" "${dst}/" 2>/dev/null; then
         echo "[sync] WARNING: failed to upload ${file}" >&2
+        return 1
+      fi
+    fi
+  done
+  return 0
+}
+
+# Download core files from remote to local directory
+download_core_files() {
+  src="$1"
+  for file in $CORE_FILES; do
+    if rclone_safe lsf "${src}/${file}" >/dev/null 2>&1; then
+      if ! rclone_safe copy "${src}/${file}" "/data/" 2>/dev/null; then
+        echo "[sync] WARNING: failed to download ${file}" >&2
         return 1
       fi
     fi
@@ -80,8 +125,24 @@ sync_attachments_upload() {
     return 1
   fi
 
-  if ! sync_core_files "/data" "${base}"; then
+  if ! upload_core_files "${base}"; then
     return 1
+  fi
+
+  # Upload icon cache if it exists and is not empty
+  # Safety check: refuse to sync if local is empty but remote has data
+  if [ -d /data/icon_cache ]; then
+    local_icon_cache_count=$(find /data/icon_cache -type f 2>/dev/null | wc -l | tr -d ' ')
+    if [ "${local_icon_cache_count}" -eq 0 ]; then
+      remote_icon_cache_count=$(rclone_safe lsf --files-only --recursive "${base}/icon_cache" 2>/dev/null | wc -l | tr -d ' ')
+      if [ "${remote_icon_cache_count}" -gt 0 ]; then
+        echo "[upload] WARNING: local icon_cache empty but remote has data, skipping sync" >&2
+        # Icon cache is regenerable, so we don't fail the entire sync
+      fi
+    elif ! rclone_safe sync /data/icon_cache "${base}/icon_cache" --backup-dir "${trash_base}/icon_cache" --suffix "${suffix}" 2>&1; then
+      echo "[upload] ERROR: icon_cache sync failed" >&2
+      return 1
+    fi
   fi
 }
 
@@ -108,7 +169,15 @@ sync_attachments_download() {
     fi
   fi
 
-  if ! sync_core_files "${base}" "/data"; then
+  if ! download_core_files "${base}"; then
     return 1
+  fi
+
+  # Download icon cache if it exists on remote
+  if remote_path_exists "${base}/icon_cache"; then
+    if ! rclone_safe sync "${base}/icon_cache" /data/icon_cache 2>&1; then
+      echo "[download] ERROR: icon_cache sync failed" >&2
+      return 1
+    fi
   fi
 }

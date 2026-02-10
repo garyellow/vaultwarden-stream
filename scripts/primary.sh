@@ -3,6 +3,7 @@ set -eu
 
 . /app/sync.sh
 . /app/backup.sh
+. /app/tailscale.sh
 
 SYNC_PID=""
 BACKUP_PID=""
@@ -17,9 +18,9 @@ cleanup() {
     wait "$SYNC_PID" 2>/dev/null || true
   fi
 
-  # Wait for backup to complete
-  backup_timeout="${BACKUP_SHUTDOWN_TIMEOUT:-60}"
+  # Wait for in-progress backup to complete
   if [ -n "$BACKUP_PID" ] && kill -0 "$BACKUP_PID" 2>/dev/null; then
+    backup_timeout="${BACKUP_SHUTDOWN_TIMEOUT:-60}"
     echo "[primary] waiting for backup to complete (timeout ${backup_timeout}s)..." >&2
     while [ $backup_timeout -gt 0 ] && kill -0 "$BACKUP_PID" 2>/dev/null; do
       sleep 1
@@ -32,9 +33,9 @@ cleanup() {
     wait "$BACKUP_PID" 2>/dev/null || true
   fi
 
-  # Stop Litestream
-  litestream_timeout="${LITESTREAM_SHUTDOWN_TIMEOUT:-30}"
+  # Stop Litestream (flush WAL to S3)
   if [ -n "$LITESTREAM_PID" ] && kill -0 "$LITESTREAM_PID" 2>/dev/null; then
+    litestream_timeout="${LITESTREAM_SHUTDOWN_TIMEOUT:-30}"
     echo "[primary] stopping litestream (timeout ${litestream_timeout}s)..." >&2
     kill "$LITESTREAM_PID" 2>/dev/null || true
     while [ $litestream_timeout -gt 0 ] && kill -0 "$LITESTREAM_PID" 2>/dev/null; do
@@ -48,8 +49,13 @@ cleanup() {
     wait "$LITESTREAM_PID" 2>/dev/null || true
   fi
 
+  # Final file upload before exit
   echo "[primary] performing final upload before exit..." >&2
   sync_attachments_upload || echo "[primary] WARNING: final upload failed" >&2
+
+  # Stop Tailscale
+  tailscale_stop
+
   write_sync_status "shutdown"
   exit 0
 }
@@ -75,6 +81,16 @@ if ! sync_attachments_download; then
 fi
 write_sync_status "ok"
 
+# Run initial backup if enabled
+if [ "${BACKUP_ENABLED:-false}" = "true" ] && [ "${BACKUP_ON_STARTUP:-false}" = "true" ]; then
+  echo "[primary] running startup backup..." >&2
+  if create_backup; then
+    echo "[primary] startup backup completed" >&2
+  else
+    echo "[primary] WARNING: startup backup failed" >&2
+  fi
+fi
+
 # Start background upload loop
 echo "[primary] starting sync loop (interval=${PRIMARY_SYNC_INTERVAL}s)" >&2
 (
@@ -86,6 +102,7 @@ echo "[primary] starting sync loop (interval=${PRIMARY_SYNC_INTERVAL}s)" >&2
     else
       write_sync_status "error"
       echo "[primary] WARNING: sync failed" >&2
+      send_notification "sync_error" "/fail"
     fi
   done
 ) &
@@ -136,5 +153,6 @@ if [ -n "$BACKUP_PID" ] && kill -0 "$BACKUP_PID" 2>/dev/null; then
   wait "$BACKUP_PID" 2>/dev/null || true
 fi
 sync_attachments_upload || echo "[primary] WARNING: final upload failed" >&2
+tailscale_stop
 write_sync_status "shutdown"
 exit "$EXIT_CODE"

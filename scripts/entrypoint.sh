@@ -1,6 +1,8 @@
 #!/bin/sh
 set -eu
 
+# ── Utility ───────────────────────────────────────────────────────────────
+
 require_var() {
   eval "val=\${$1:-}"
   if [ -z "$val" ]; then
@@ -9,37 +11,54 @@ require_var() {
   fi
 }
 
-# Validate required S3 credentials
+validate_integer() {
+  case "$2" in
+    *[!0-9]*|"")
+      echo "[entrypoint] ERROR: $1 must be a non-negative integer (got: $2)" >&2
+      exit 1
+      ;;
+  esac
+}
+
+validate_boolean() {
+  case "$2" in
+    true|false) ;;
+    *)
+      echo "[entrypoint] ERROR: $1 must be true or false (got: $2)" >&2
+      exit 1
+      ;;
+  esac
+}
+
+# ── S3 validation ─────────────────────────────────────────────────────────
+
+require_var S3_PROVIDER
 require_var S3_BUCKET
 require_var S3_ENDPOINT
-require_var S3_PROVIDER
 require_var S3_ACCESS_KEY_ID
 require_var S3_SECRET_ACCESS_KEY
 
-: "${S3_REGION:=auto}"
 : "${S3_PREFIX:=vaultwarden}"
+: "${S3_REGION:=auto}"
 : "${S3_ACL:=private}"
 : "${S3_NO_CHECK_BUCKET:=true}"
+
+# Normalize S3_PREFIX (strip leading/trailing/duplicate slashes)
+S3_PREFIX=$(echo "$S3_PREFIX" | sed -e 's#^/*##' -e 's#/*$##' -e 's#//*#/#g')
+
+export S3_PREFIX S3_REGION S3_ACL S3_NO_CHECK_BUCKET
+
+# ── Deployment validation ─────────────────────────────────────────────────
+
+: "${NODE_ROLE:=primary}"
+: "${DEPLOYMENT_MODE:=persistent}"
 : "${PRIMARY_SYNC_INTERVAL:=300}"
 : "${SECONDARY_SYNC_INTERVAL:=3600}"
-: "${DEPLOYMENT_MODE:=persistent}"
 
-# Normalize S3_PREFIX (remove leading/trailing slashes)
-S3_PREFIX=$(echo "$S3_PREFIX" | sed -e 's#^/*##' -e 's#/*$##' -e 's#//*#/#g')
-: "${LITESTREAM_REPLICA_PATH:=${S3_PREFIX}/db.sqlite3}"
-export S3_REGION S3_ACL S3_PREFIX S3_NO_CHECK_BUCKET LITESTREAM_REPLICA_PATH
-export PRIMARY_SYNC_INTERVAL SECONDARY_SYNC_INTERVAL DEPLOYMENT_MODE
-
-case "$PRIMARY_SYNC_INTERVAL" in
-  *[!0-9]*)
-    echo "[entrypoint] ERROR: PRIMARY_SYNC_INTERVAL must be an integer number of seconds" >&2
-    exit 1
-    ;;
-esac
-
-case "$SECONDARY_SYNC_INTERVAL" in
-  *[!0-9]*)
-    echo "[entrypoint] ERROR: SECONDARY_SYNC_INTERVAL must be an integer number of seconds" >&2
+case "$NODE_ROLE" in
+  primary|secondary) ;;
+  *)
+    echo "[entrypoint] ERROR: NODE_ROLE must be primary or secondary (got: $NODE_ROLE)" >&2
     exit 1
     ;;
 esac
@@ -52,31 +71,77 @@ case "$DEPLOYMENT_MODE" in
     ;;
 esac
 
-# Validate RCLONE_REMOTE_NAME (must be safe for shell variable expansion)
-remote="${RCLONE_REMOTE_NAME:-S3}"
-case "$remote" in
+validate_integer PRIMARY_SYNC_INTERVAL "$PRIMARY_SYNC_INTERVAL"
+validate_integer SECONDARY_SYNC_INTERVAL "$SECONDARY_SYNC_INTERVAL"
+
+export NODE_ROLE DEPLOYMENT_MODE PRIMARY_SYNC_INTERVAL SECONDARY_SYNC_INTERVAL
+
+# ── Litestream defaults ───────────────────────────────────────────────────
+
+: "${LITESTREAM_DB_PATH:=/data/db.sqlite3}"
+: "${LITESTREAM_SYNC_INTERVAL:=1s}"
+: "${LITESTREAM_SNAPSHOT_INTERVAL:=30m}"
+: "${LITESTREAM_RETENTION:=24h}"
+
+if [ -n "${S3_PREFIX}" ]; then
+  : "${LITESTREAM_REPLICA_PATH:=${S3_PREFIX}/db.sqlite3}"
+else
+  : "${LITESTREAM_REPLICA_PATH:=db.sqlite3}"
+fi
+
+: "${LITESTREAM_FORCE_PATH_STYLE:=false}"
+: "${LITESTREAM_SKIP_VERIFY:=false}"
+
+export LITESTREAM_DB_PATH LITESTREAM_SYNC_INTERVAL LITESTREAM_SNAPSHOT_INTERVAL
+export LITESTREAM_RETENTION LITESTREAM_REPLICA_PATH
+
+validate_boolean LITESTREAM_FORCE_PATH_STYLE "$LITESTREAM_FORCE_PATH_STYLE"
+validate_boolean LITESTREAM_SKIP_VERIFY "$LITESTREAM_SKIP_VERIFY"
+export LITESTREAM_FORCE_PATH_STYLE LITESTREAM_SKIP_VERIFY
+
+: "${LITESTREAM_VALIDATION_INTERVAL:=}"
+export LITESTREAM_VALIDATION_INTERVAL
+
+: "${LITESTREAM_SHUTDOWN_TIMEOUT:=30}"
+validate_integer LITESTREAM_SHUTDOWN_TIMEOUT "$LITESTREAM_SHUTDOWN_TIMEOUT"
+export LITESTREAM_SHUTDOWN_TIMEOUT
+
+: "${HEALTHCHECK_MAX_SYNC_AGE:=600}"
+validate_integer HEALTHCHECK_MAX_SYNC_AGE "$HEALTHCHECK_MAX_SYNC_AGE"
+export HEALTHCHECK_MAX_SYNC_AGE
+
+# ── rclone configuration ─────────────────────────────────────────────────
+
+: "${RCLONE_REMOTE_NAME:=S3}"
+case "$RCLONE_REMOTE_NAME" in
   *[!A-Za-z0-9_]*)
     echo "[entrypoint] ERROR: RCLONE_REMOTE_NAME must contain only letters, digits, and underscores" >&2
     exit 1
     ;;
 esac
+export RCLONE_REMOTE_NAME
 
-# Configure rclone to use S3 credentials
-# This creates a virtual rclone remote without needing a config file
-export "RCLONE_CONFIG_${remote}_TYPE=s3"
-export "RCLONE_CONFIG_${remote}_PROVIDER=${S3_PROVIDER}"
-export "RCLONE_CONFIG_${remote}_ACCESS_KEY_ID=${S3_ACCESS_KEY_ID}"
-export "RCLONE_CONFIG_${remote}_SECRET_ACCESS_KEY=${S3_SECRET_ACCESS_KEY}"
-export "RCLONE_CONFIG_${remote}_ENDPOINT=${S3_ENDPOINT}"
-export "RCLONE_CONFIG_${remote}_REGION=${S3_REGION}"
-export "RCLONE_CONFIG_${remote}_ACL=${S3_ACL}"
-export "RCLONE_CONFIG_${remote}_NO_CHECK_BUCKET=${S3_NO_CHECK_BUCKET}"
+export "RCLONE_CONFIG_${RCLONE_REMOTE_NAME}_TYPE=s3"
+export "RCLONE_CONFIG_${RCLONE_REMOTE_NAME}_PROVIDER=${S3_PROVIDER}"
+export "RCLONE_CONFIG_${RCLONE_REMOTE_NAME}_ACCESS_KEY_ID=${S3_ACCESS_KEY_ID}"
+export "RCLONE_CONFIG_${RCLONE_REMOTE_NAME}_SECRET_ACCESS_KEY=${S3_SECRET_ACCESS_KEY}"
+export "RCLONE_CONFIG_${RCLONE_REMOTE_NAME}_ENDPOINT=${S3_ENDPOINT}"
+export "RCLONE_CONFIG_${RCLONE_REMOTE_NAME}_REGION=${S3_REGION}"
+export "RCLONE_CONFIG_${RCLONE_REMOTE_NAME}_ACL=${S3_ACL}"
+export "RCLONE_CONFIG_${RCLONE_REMOTE_NAME}_NO_CHECK_BUCKET=${S3_NO_CHECK_BUCKET}"
 
-# Generate Litestream configuration from template
-# Substitutes environment variables like $S3_BUCKET, $S3_PREFIX, etc.
+# ── Litestream config generation ──────────────────────────────────────────
+
 envsubst < /app/litestream.yml.tpl > /etc/litestream.yml
 
-# Validate backup schedule (if backup is enabled)
+# Drop empty optional fields to keep YAML valid.
+# (Litestream disables validation by default; leaving an empty value can break parsing.)
+tmp_litestream_yml="/tmp/litestream.yml.$$"
+grep -v '^[[:space:]]*validation-interval:[[:space:]]*$' /etc/litestream.yml > "$tmp_litestream_yml"
+mv "$tmp_litestream_yml" /etc/litestream.yml
+
+# ── Backup validation ─────────────────────────────────────────────────────
+
 if [ "${BACKUP_ENABLED:-false}" = "true" ]; then
   : "${BACKUP_CRON:=0 0 * * *}"
   cron_field_count=$(echo "$BACKUP_CRON" | awk '{print NF}')
@@ -85,48 +150,181 @@ if [ "${BACKUP_ENABLED:-false}" = "true" ]; then
     exit 1
   fi
   export BACKUP_CRON
-fi
 
-# Validate extra backup remotes (if backup is enabled)
-if [ "${BACKUP_ENABLED:-false}" = "true" ] && [ -n "${BACKUP_EXTRA_REMOTES:-}" ]; then
-  echo "[entrypoint] validating extra backup remotes..." >&2
-  echo "$BACKUP_EXTRA_REMOTES" | tr ',' '\n' | while IFS= read -r remote_path; do
+  # Validate BACKUP_INCLUDE_* flags
+  for flag in BACKUP_INCLUDE_ATTACHMENTS BACKUP_INCLUDE_SENDS BACKUP_INCLUDE_CONFIG; do
+    eval "val=\${${flag}:-true}"
+    validate_boolean "$flag" "$val"
+    export "$flag=$val"
+  done
+  # Icon cache defaults to false (icons are re-fetchable)
+  val="${BACKUP_INCLUDE_ICON_CACHE:-false}"
+  validate_boolean BACKUP_INCLUDE_ICON_CACHE "$val"
+  export "BACKUP_INCLUDE_ICON_CACHE=$val"
+
+  : "${BACKUP_RETENTION_DAYS:=30}"
+  : "${BACKUP_MIN_KEEP:=3}"
+  : "${BACKUP_SHUTDOWN_TIMEOUT:=60}"
+  validate_integer BACKUP_RETENTION_DAYS "$BACKUP_RETENTION_DAYS"
+  validate_integer BACKUP_MIN_KEEP "$BACKUP_MIN_KEEP"
+  validate_integer BACKUP_SHUTDOWN_TIMEOUT "$BACKUP_SHUTDOWN_TIMEOUT"
+  export BACKUP_RETENTION_DAYS BACKUP_MIN_KEEP BACKUP_SHUTDOWN_TIMEOUT
+
+  # Validate backup format
+  : "${BACKUP_FORMAT:=tar.gz}"
+  case "$BACKUP_FORMAT" in
+    tar.gz|tar) ;;
+    *)
+      echo "[entrypoint] ERROR: BACKUP_FORMAT must be tar.gz or tar (got: $BACKUP_FORMAT)" >&2
+      exit 1
+      ;;
+  esac
+  export BACKUP_FORMAT
+
+  # Validate BACKUP_ON_STARTUP
+  : "${BACKUP_ON_STARTUP:=false}"
+  validate_boolean BACKUP_ON_STARTUP "$BACKUP_ON_STARTUP"
+  export BACKUP_ON_STARTUP
+
+  # Validate encryption password (if set)
+  if [ -n "${BACKUP_PASSWORD:-}" ]; then
+    if [ "$BACKUP_FORMAT" = "tar" ]; then
+      echo "[entrypoint] ERROR: BACKUP_PASSWORD requires BACKUP_FORMAT=tar.gz" >&2
+      exit 1
+    fi
+    if ! command -v openssl >/dev/null 2>&1; then
+      echo "[entrypoint] ERROR: encryption requires 'openssl'" >&2
+      exit 1
+    fi
+    echo "[entrypoint] backup encryption: enabled" >&2
+    export BACKUP_PASSWORD
+  fi
+
+  # Require at least one backup destination
+  if [ -z "${BACKUP_REMOTES:-}" ]; then
+    echo "[entrypoint] ERROR: BACKUP_ENABLED=true but BACKUP_REMOTES is not set" >&2
+    echo "[entrypoint]   Example: BACKUP_REMOTES=S3:my-bucket/backups" >&2
+    exit 1
+  fi
+
+  # Validate configured remotes (via env vars; may not exist in rclone config file)
+  echo "[entrypoint] validating backup remotes..." >&2
+  _remotes_remaining="$BACKUP_REMOTES"
+  while [ -n "$_remotes_remaining" ]; do
+    case "$_remotes_remaining" in
+      *,*) remote_path="${_remotes_remaining%%,*}"; _remotes_remaining="${_remotes_remaining#*,}" ;;
+      *)   remote_path="$_remotes_remaining"; _remotes_remaining="" ;;
+    esac
     remote_path=$(echo "$remote_path" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
     [ -z "$remote_path" ] && continue
-    remote="${remote_path%%:*}"
-    if ! rclone config show "$remote" >/dev/null 2>&1; then
-      echo "[entrypoint] WARNING: remote '$remote' is not configured" >&2
-      echo "[entrypoint]   Make sure to set RCLONE_CONFIG_${remote}_TYPE and other required variables" >&2
+    case "$remote_path" in
+      *:*) ;;
+      *)
+        echo "[entrypoint] ERROR: invalid BACKUP_REMOTES entry (missing ':'): $remote_path" >&2
+        exit 1
+        ;;
+    esac
+    remote_name="${remote_path%%:*}"
+    eval "remote_type=\${RCLONE_CONFIG_${remote_name}_TYPE:-}"
+    if [ -z "$remote_type" ]; then
+      echo "[entrypoint] WARNING: remote '$remote_name' is not configured via env vars" >&2
+      echo "[entrypoint]   Set RCLONE_CONFIG_${remote_name}_TYPE and other required variables" >&2
     else
-      echo "[entrypoint]   ✓ remote '$remote' configured" >&2
+      echo "[entrypoint]   ✓ remote '$remote_name' configured (type=${remote_type})" >&2
     fi
   done
 fi
 
-# Launch based on NODE_ROLE
-role="${NODE_ROLE:-primary}"
-case "$role" in
+# ── Notification validation ─────────────────────────────────────────
+
+if [ -n "${NOTIFICATION_URL:-}" ]; then
+  : "${NOTIFICATION_EVENTS:=}"
+  : "${NOTIFICATION_TIMEOUT:=10}"
+  validate_integer NOTIFICATION_TIMEOUT "$NOTIFICATION_TIMEOUT"
+  if [ -n "$NOTIFICATION_EVENTS" ]; then
+    NOTIFICATION_EVENTS=$(echo "$NOTIFICATION_EVENTS" | tr -d '[:space:]')
+  fi
+  export NOTIFICATION_URL NOTIFICATION_EVENTS NOTIFICATION_TIMEOUT
+  echo "[entrypoint] notifications: enabled (events: ${NOTIFICATION_EVENTS:-all})" >&2
+fi
+
+# ── rclone advanced ────────────────────────────────────────────
+
+if [ -n "${RCLONE_FLAGS:-}" ]; then
+  echo "[entrypoint] rclone: custom flags enabled: ${RCLONE_FLAGS}" >&2
+  export RCLONE_FLAGS
+fi
+
+# ── Tailscale validation ─────────────────────────────────────────────────
+
+if [ "${TAILSCALE_ENABLED:-false}" = "true" ]; then
+  if ! command -v tailscale >/dev/null 2>&1; then
+    echo "[entrypoint] ERROR: TAILSCALE_ENABLED=true but tailscale binary not found" >&2
+    exit 1
+  fi
+
+  if [ -z "${TAILSCALE_AUTHKEY:-}" ]; then
+    echo "[entrypoint] ERROR: TAILSCALE_ENABLED=true requires TAILSCALE_AUTHKEY for unattended startup" >&2
+    exit 1
+  fi
+
+  if [ -n "${TAILSCALE_SERVE_PORT:-}" ]; then
+    validate_integer TAILSCALE_SERVE_PORT "$TAILSCALE_SERVE_PORT"
+  fi
+
+  if [ -n "${TAILSCALE_SERVE_MODE:-}" ]; then
+    case "$TAILSCALE_SERVE_MODE" in
+      https|tls-terminated-tcp) ;;
+      *)
+        echo "[entrypoint] ERROR: TAILSCALE_SERVE_MODE must be https or tls-terminated-tcp (got: $TAILSCALE_SERVE_MODE)" >&2
+        exit 1
+        ;;
+    esac
+  fi
+
+  if [ -n "${TAILSCALE_FUNNEL:-}" ]; then
+    validate_boolean TAILSCALE_FUNNEL "${TAILSCALE_FUNNEL}"
+  fi
+fi
+
+# ── Start Tailscale (if enabled) ──────────────────────────────────────────
+
+. /app/tailscale.sh
+tailscale_start
+
+# ── Dispatch to role script ──────────────────────────────────────────────
+
+case "$NODE_ROLE" in
   primary)
     if [ "$DEPLOYMENT_MODE" = "serverless" ]; then
-      echo "[entrypoint] NOTE: primary on serverless — set max-instances=1 to prevent concurrent writers" >&2
+      echo "[entrypoint] NOTE: primary on serverless — ensure max-instances=1 to prevent concurrent writers" >&2
     fi
-    echo "[entrypoint] launching primary (vaultwarden + litestream + rclone upload)..." >&2
+    echo "[entrypoint] launching primary (vaultwarden + litestream + rclone)" >&2
     echo "[entrypoint] S3: ${S3_PROVIDER} ${S3_BUCKET}/${S3_PREFIX}" >&2
-    echo "[entrypoint] sync interval: ${PRIMARY_SYNC_INTERVAL}s" >&2
-    [ "${BACKUP_ENABLED:-false}" = "true" ] && echo "[entrypoint] backup schedule: ${BACKUP_CRON}" >&2
+    echo "[entrypoint] file sync interval: ${PRIMARY_SYNC_INTERVAL}s" >&2
+    if [ "${BACKUP_ENABLED:-false}" = "true" ]; then
+      echo "[entrypoint] backup: ${BACKUP_CRON} (${BACKUP_FORMAT:-tar.gz})" >&2
+      [ "${BACKUP_ON_STARTUP:-false}" = "true" ] && echo "[entrypoint]   - startup backup: enabled" >&2
+      [ -n "${NOTIFICATION_URL:-}" ] && echo "[entrypoint]   - notifications: enabled" >&2
+    fi
+    if [ -n "${NOTIFICATION_URL:-}" ] && [ "${BACKUP_ENABLED:-false}" = "false" ]; then
+      if [ -n "${NOTIFICATION_EVENTS:-}" ]; then
+        echo "[entrypoint] notifications: sync events only" >&2
+      else
+        echo "[entrypoint] notifications: all events" >&2
+      fi
+    fi
+    [ "${TAILSCALE_ENABLED:-false}" = "true" ] && echo "[entrypoint] tailscale: enabled" >&2
     exec /app/primary.sh
     ;;
   secondary)
     if [ "$DEPLOYMENT_MODE" = "serverless" ]; then
-      echo "[entrypoint] launching secondary (serverless — restore once, no periodic refresh)..." >&2
+      echo "[entrypoint] launching secondary (serverless — restore once, no periodic refresh)" >&2
     else
-      echo "[entrypoint] launching secondary (persistent — periodic refresh every ${SECONDARY_SYNC_INTERVAL}s)..." >&2
+      echo "[entrypoint] launching secondary (persistent — refresh every ${SECONDARY_SYNC_INTERVAL}s)" >&2
     fi
     echo "[entrypoint] S3: ${S3_PROVIDER} ${S3_BUCKET}/${S3_PREFIX}" >&2
+    [ "${TAILSCALE_ENABLED:-false}" = "true" ] && echo "[entrypoint] tailscale: enabled" >&2
     exec /app/secondary.sh
-    ;;
-  *)
-    echo "[entrypoint] ERROR: NODE_ROLE must be primary or secondary (got: $role)" >&2
-    exit 1
     ;;
 esac
