@@ -20,7 +20,7 @@ cp .env.example .env
 docker compose up -d
 ```
 
-Access at `http://localhost:8080`. See [.env.example](.env.example) for all configuration options and [environment.md](environment.md) for detailed documentation.
+Access at `http://localhost`. See [.env.example](.env.example) for all configuration options and [environment.md](environment.md) for detailed documentation.
 
 ## Architecture
 
