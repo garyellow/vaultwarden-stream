@@ -108,7 +108,7 @@ Used by Litestream (database replication) and rclone (file sync). All fields are
 | `TAILSCALE_HOSTNAME` | `vaultwarden` | Node hostname on the tailnet |
 | `TAILSCALE_STATE_DIR` | `/var/lib/tailscale` | Persistent state directory |
 | `TAILSCALE_LOGIN_SERVER` | — | Custom control server URL (for [Headscale](https://github.com/juanfont/headscale)) |
-| `TAILSCALE_SERVE_PORT` | — | Local port to expose via Serve (blank = disabled) |
+| `TAILSCALE_SERVE_PORT` | `80` | Local port to expose via Tailscale Serve |
 | `TAILSCALE_SERVE_MODE` | `https` | Serve protocol (`https`, `tls-terminated-tcp`) |
 | `TAILSCALE_FUNNEL` | `false` | Expose to the **public internet** via Tailscale Funnel |
 | `TAILSCALE_EXTRA_ARGS` | — | Additional `tailscale up` flags |
