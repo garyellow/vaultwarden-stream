@@ -85,7 +85,7 @@ echo "[secondary] restoring from S3 (parallel: database + files)..." >&2
     echo "[secondary] ERROR: database restore failed (check S3 connectivity)" >&2
     exit 1
   fi
-  echo "[secondary] database restored" >&2
+  echo "[secondary] INFO: database restored" >&2
 ) &
 _startup_db_pid=$!
 
@@ -94,7 +94,7 @@ _startup_db_pid=$!
     echo "[secondary] ERROR: file download failed (check S3 connectivity)" >&2
     exit 1
   fi
-  echo "[secondary] files downloaded" >&2
+  echo "[secondary] INFO: files downloaded" >&2
 ) &
 _startup_files_pid=$!
 
@@ -126,7 +126,7 @@ while [ -z "$STOP_REQUESTED" ]; do
   if [ -n "$VW_PID" ] && ! kill -0 "$VW_PID" 2>/dev/null; then
     wait "$VW_PID" 2>/dev/null || true
     if [ -z "$STOP_REQUESTED" ]; then
-      echo "[secondary] vaultwarden exited unexpectedly, restarting..." >&2
+      echo "[secondary] WARNING: vaultwarden exited unexpectedly, restarting..." >&2
       start_vaultwarden
     fi
   fi
@@ -182,7 +182,7 @@ while [ -z "$STOP_REQUESTED" ]; do
 
       if [ "$refresh_ok" = true ]; then
         write_sync_status "ok"
-        echo "[secondary] refresh completed" >&2
+        echo "[secondary] INFO: refresh completed" >&2
       else
         write_sync_status "error"
         echo "[secondary] WARNING: refresh failed" >&2

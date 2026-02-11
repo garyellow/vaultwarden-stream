@@ -93,7 +93,7 @@ upload_backup() {
   done
 
   if [ "$success" -eq 1 ]; then
-    echo "[backup] successfully uploaded to at least 1 of ${_ub_count} remote(s)" >&2
+    echo "[backup] INFO: successfully uploaded to at least 1 of ${_ub_count} remote(s)" >&2
     return 0
   fi
 
@@ -303,7 +303,7 @@ create_backup() {
     return 1
   fi
 
-  echo "[backup] created ${backup_name}" >&2
+  echo "[backup] INFO: created ${backup_name}" >&2
 
   if ! upload_backup "/tmp/${backup_name}"; then
     echo "[backup] ERROR: all uploads failed" >&2

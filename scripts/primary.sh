@@ -117,7 +117,7 @@ echo "[primary] restoring from S3 (parallel: database + files)..." >&2
     echo "[primary] ERROR: database restore failed (check S3 connectivity)" >&2
     exit 1
   fi
-  echo "[primary] database restored" >&2
+  echo "[primary] INFO: database restored" >&2
 ) &
 _startup_db_pid=$!
 
@@ -126,7 +126,7 @@ _startup_db_pid=$!
     echo "[primary] ERROR: file download failed (check S3 connectivity)" >&2
     exit 1
   fi
-  echo "[primary] files downloaded" >&2
+  echo "[primary] INFO: files downloaded" >&2
 ) &
 _startup_files_pid=$!
 
@@ -144,7 +144,7 @@ write_sync_status "ok"
 if [ "$BACKUP_ENABLED" = "true" ] && [ "$BACKUP_ON_STARTUP" = "true" ]; then
   echo "[primary] running startup backup..." >&2
   if create_backup; then
-    echo "[primary] startup backup completed" >&2
+    echo "[primary] INFO: startup backup completed" >&2
   else
     echo "[primary] WARNING: startup backup failed" >&2
   fi
@@ -161,14 +161,14 @@ echo "[primary] starting sync loop (interval=${PRIMARY_SYNC_INTERVAL}s)" >&2
     [ -n "$STOP_REQUESTED" ] && break
     if sync_upload; then
       write_sync_status "ok"
-      echo "[primary] sync completed" >&2
+      echo "[primary] INFO: sync completed" >&2
     else
       write_sync_status "error"
       echo "[primary] WARNING: sync failed" >&2
       send_notification "sync_error" "/fail"
     fi
   done
-  echo "[primary] sync loop exited gracefully" >&2
+  echo "[primary] INFO: sync loop exited gracefully" >&2
 ) &
 SYNC_PID=$!
 
@@ -194,7 +194,7 @@ if [ "$BACKUP_ENABLED" = "true" ]; then
         fi
       fi
     done
-    echo "[primary] backup loop exited gracefully" >&2
+    echo "[primary] INFO: backup loop exited gracefully" >&2
   ) &
   BACKUP_PID=$!
 fi

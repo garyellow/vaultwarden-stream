@@ -82,7 +82,7 @@ tailscale_start() {
   fi
 
   ts_ip=$(tailscale ip -4 2>/dev/null || echo "unknown")
-  echo "[tailscale] connected (Tailscale IP: ${ts_ip})" >&2
+  echo "[tailscale] INFO: connected (Tailscale IP: ${ts_ip})" >&2
 }
 
 # ── Stop ──────────────────────────────────────────────────────────────────
