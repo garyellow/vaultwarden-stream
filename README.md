@@ -5,7 +5,7 @@ Vaultwarden with automated S3 backup — real-time database replication via [Lit
 ## Features
 
 - **Real-time database replication** — SQLite WAL streamed to S3 via Litestream (~1s latency)
-- **Automatic file sync** — Attachments, sends, and RSA keys synced to S3 via rclone
+- **Automatic file sync** — Attachments, sends, and RSA keys packed into tar archives and synced to S3 via rclone
 - **Disaster recovery** — Run standby secondary instances that restore from S3
 - **Scheduled backups** — Tar archives with retention and multi-destination support
 - **Monitoring integration** — HTTP ping notifications for backup and sync events
@@ -31,14 +31,14 @@ graph TB
         DB1[(Local Database)]
         FILES1[(Local Files)]
         LS1[Litestream]
-        RC1[rclone]
+        RC1[rclone TAR sync]
         BACKUP1[backup.sh]
         TS1["Tailscale<br/>(optional)"]
 
         VW1 <-->|read/write| DB1
         VW1 <-->|read/write| FILES1
         DB1 -->|WAL stream| LS1
-        FILES1 -->|scan| RC1
+        FILES1 -->|tar pack| RC1
         DB1 -.->|snapshot| BACKUP1
         FILES1 -.->|archive| BACKUP1
         TS1 -.->|mesh VPN| VW1
@@ -46,7 +46,7 @@ graph TB
 
     subgraph S3["S3 STORAGE"]
         S3DB[(Database Replica<br/>WAL + Snapshots)]
-        S3FILES[(Files<br/>attachments/sends/config)]
+        S3FILES[(Files<br/>tar archives)]
         S3BACKUP[("Archive Snapshots<br/>(optional)")]
     end
 
@@ -55,7 +55,7 @@ graph TB
         DB2[(Local Database)]
         FILES2[(Local Files)]
         LS2[Litestream]
-        RC2[rclone]
+        RC2[rclone TAR sync]
 
         DB2 -->|read| VW2
         FILES2 -->|read| VW2
@@ -64,11 +64,11 @@ graph TB
     end
 
     LS1 -->|replicate ~1s| S3DB
-    RC1 -->|upload 5min| S3FILES
+    RC1 -->|upload tar 5min| S3FILES
     BACKUP1 -.->|upload| S3BACKUP
 
     S3DB -->|restore/sync| LS2
-    S3FILES -->|sync| RC2
+    S3FILES -->|download tar| RC2
     S3DB -.->|init restore| LS1
     S3FILES -.->|init download| RC1
 
@@ -84,7 +84,7 @@ graph TB
 **Primary instance**
 - Vaultwarden reads/writes local database and files
 - Litestream streams WAL to S3 (~1s latency)
-- rclone uploads files to S3 every 5 minutes (default)
+- Files packed into tar archives and uploaded to S3 every 5 minutes (default)
 - Optional: scheduled backups via cron
 - On startup: restores from S3 if data exists
 
@@ -96,7 +96,7 @@ graph TB
 
 **S3 storage**
 - Database: WAL stream + snapshots (managed by Litestream)
-- Files: attachments, sends, RSA keys, config.json, icon_cache
+- Files: tar archives — `attachments.tar`, `sends.tar`, `config.tar`, `icon_cache.tar`
 - Backups: optional encrypted tar archives
 
 ## Disaster Recovery

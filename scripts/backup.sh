@@ -11,8 +11,8 @@ set -eu
 # Clean up old backups while maintaining minimum count
 cleanup_backups() {
   target="$1"
-  retention_days="${BACKUP_RETENTION_DAYS:-30}"
-  min_keep="${BACKUP_MIN_KEEP:-3}"
+  retention_days="$BACKUP_RETENTION_DAYS"
+  min_keep="$BACKUP_MIN_KEEP"
 
   [ "$retention_days" -gt 0 ] 2>/dev/null || return 0
   [ "$min_keep" -gt 0 ] 2>/dev/null || return 0
@@ -180,7 +180,7 @@ create_backup() {
   mkdir -p "$backup_dir"
 
   # Database snapshot (always included)
-  if ! sqlite3 "$LITESTREAM_DB_PATH" ".backup '${backup_dir}/db.sqlite3'" 2>&1; then
+  if ! sqlite3 "$LITESTREAM_DB_PATH" ".backup '${backup_dir}/db.sqlite3'"; then
     echo "[backup] ERROR: database snapshot failed" >&2
     rm -rf "$backup_dir"
     send_notification "backup_failure" "/fail"
@@ -222,9 +222,9 @@ create_backup() {
       if [ -n "$password" ]; then
         # Create unencrypted archive first to capture exit code safely
         temp_archive="/tmp/vw-temp-${timestamp}.tar.gz"
-        if tar -czf "$temp_archive" -C "$backup_dir" . 2>&1; then
+        if tar -czf "$temp_archive" -C "$backup_dir" .; then
           if openssl enc -aes-256-cbc -pbkdf2 -pass env:BACKUP_PASSWORD \
-              -in "$temp_archive" -out "/tmp/${backup_name}" 2>&1; then
+              -in "$temp_archive" -out "/tmp/${backup_name}"; then
             archive_ok=true
           else
             echo "[backup] ERROR: encryption failed" >&2
@@ -233,13 +233,13 @@ create_backup() {
         # Clean up temp archive regardless of success/failure
         rm -f "$temp_archive"
       else
-        if tar -czf "/tmp/${backup_name}" -C "$backup_dir" . 2>&1; then
+        if tar -czf "/tmp/${backup_name}" -C "$backup_dir" .; then
           archive_ok=true
         fi
       fi
       ;;
     tar)
-      if tar -cf "/tmp/${backup_name}" -C "$backup_dir" . 2>&1; then
+      if tar -cf "/tmp/${backup_name}" -C "$backup_dir" .; then
         archive_ok=true
       fi
       ;;

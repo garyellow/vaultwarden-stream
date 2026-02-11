@@ -37,7 +37,6 @@ tailscale_start() {
   fi
   if [ -n "${TAILSCALE_EXTRA_ARGS:-}" ]; then
     # Allow advanced users to pass additional args (word-splitting is intentional here).
-    # shellcheck disable=SC2086
     set -- "$@" ${TAILSCALE_EXTRA_ARGS}
   fi
 
@@ -96,9 +95,15 @@ tailscale_stop() {
   fi
 
   echo "[tailscale] shutting down..." >&2
-  tailscale funnel off 2>/dev/null || true
-  tailscale serve off 2>/dev/null || true
-  tailscale logout 2>/dev/null || true
+
+  # Only turn off funnel/serve if they were configured during start
+  if [ "${TAILSCALE_FUNNEL:-false}" = "true" ] && [ -n "${TAILSCALE_SERVE_PORT:-}" ]; then
+    timeout 5 tailscale funnel off >/dev/null 2>&1 || true
+  elif [ -n "${TAILSCALE_SERVE_PORT:-}" ]; then
+    timeout 5 tailscale serve off >/dev/null 2>&1 || true
+  fi
+
+  timeout 10 tailscale logout >/dev/null 2>&1 || true
 
   if [ -f "$TAILSCALED_PID_FILE" ]; then
     pid=$(cat "$TAILSCALED_PID_FILE")

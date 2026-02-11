@@ -2,7 +2,7 @@
 set -eu
 
 SYNC_STATUS_FILE="/tmp/sync-status.json"
-MAX_SYNC_AGE="${HEALTHCHECK_MAX_SYNC_AGE:-600}"
+MAX_SYNC_AGE="$HEALTHCHECK_MAX_SYNC_AGE"
 ROLE="${NODE_ROLE:-primary}"
 
 # Check if a process with given name is running

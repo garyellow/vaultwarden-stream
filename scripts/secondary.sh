@@ -43,8 +43,29 @@ restore_database() {
 cleanup() {
   echo "[secondary] shutdown signal received, cleaning up..." >&2
   STOP_REQUESTED=1
-  stop_vaultwarden
-  tailscale_stop
+
+  if [ -n "$VW_PID" ] && kill -0 "$VW_PID" 2>/dev/null; then
+    kill "$VW_PID" 2>/dev/null || true
+  fi
+
+  ( tailscale_stop ) &
+  _ts_pid=$!
+
+  if [ -n "$VW_PID" ]; then
+    wait "$VW_PID" 2>/dev/null || true
+    VW_PID=""
+  fi
+
+  _t=20
+  while [ "$_t" -gt 0 ] && kill -0 "$_ts_pid" 2>/dev/null; do
+    sleep 1; _t=$((_t - 1))
+  done
+  if kill -0 "$_ts_pid" 2>/dev/null; then
+    echo "[secondary] WARNING: tailscale shutdown timeout" >&2
+    kill "$_ts_pid" 2>/dev/null || true
+  fi
+  wait "$_ts_pid" 2>/dev/null || true
+
   write_sync_status "shutdown"
   exit 0
 }
@@ -63,8 +84,8 @@ if ! litestream restore -if-replica-exists -config /etc/litestream.yml "$LITESTR
   exit 1
 fi
 
-echo "[secondary] downloading attachments and keys from S3..." >&2
-if ! sync_attachments_download; then
+echo "[secondary] downloading files from S3..." >&2
+if ! sync_download; then
   echo "[secondary] ERROR: initial download failed (check S3 connectivity)" >&2
   exit 1
 fi
@@ -82,8 +103,8 @@ start_vaultwarden
 #
 # Persistent mode:
 #   - Refreshes data from S3 every SECONDARY_SYNC_INTERVAL seconds
-#   - Downloads attachments/keys while Vaultwarden is running (safe)
-#   - Restores database to temp file, then swaps it (~2-3 seconds downtime)
+#   - Downloads tar archives while Vaultwarden is running (safe)
+#   - Briefly restarts Vaultwarden to swap the database
 #
 # Serverless mode:
 #   - No periodic refresh needed (data is restored fresh on every cold start)
@@ -120,9 +141,9 @@ while [ -z "$STOP_REQUESTED" ]; do
       seconds_since_refresh=0
       refresh_ok=true
 
-      # Download attachments/keys (safe while VW is running)
-      if ! sync_attachments_download; then
-        echo "[secondary] WARNING: attachment download failed" >&2
+      # Download files (safe while VW is running)
+      if ! sync_download; then
+        echo "[secondary] WARNING: file download failed" >&2
         refresh_ok=false
       fi
 

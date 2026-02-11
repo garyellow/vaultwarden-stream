@@ -6,7 +6,7 @@ For Vaultwarden-specific options, refer to the [Vaultwarden Wiki](https://github
 
 ## S3 Storage
 
-Used by Litestream (database replication) and rclone (file sync). All fields are required unless noted.
+Required. Used by Litestream (database replication) and rclone (tar-based file sync).
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -20,14 +20,43 @@ Used by Litestream (database replication) and rclone (file sync). All fields are
 | `S3_ACL` | `private` | Object ACL |
 | `S3_NO_CHECK_BUCKET` | `true` | Skip bucket existence check |
 
+### S3 Object Structure
+
+Files are packed into uncompressed tar archives before upload (reducing API calls from N to 4):
+
+```
+<bucket>/<S3_PREFIX>/
+├── db.sqlite3/                              # Litestream WAL + snapshots (managed automatically)
+├── attachments.tar                          # Vault attachments
+├── sends.tar                                # Vault sends
+├── config.tar                               # RSA keys + config.json
+└── icon_cache.tar                           # Favicon cache (regenerable)
+
+# Optional scheduled backups (requires BACKUP_ENABLED=true + BACKUP_REMOTES configuration)
+<custom-backup-path>/
+└── vaultwarden-YYYYMMDD-HHMMSS.tar.gz      # Snapshot backup (tar.gz, tar, or tar.gz.enc)
+    └── db.sqlite3                           # Database snapshot
+    └── attachments/                         # Vault attachments (configurable)
+    └── sends/                               # Vault sends (configurable)
+    └── config files                         # RSA keys + config.json (configurable)
+    └── icon_cache/                          # Favicon cache (optional, configurable)
+```
+
+**Notes:**
+- **Sync files**: Only uploaded when content changes (md5 hash comparison)
+- **Backup destination**: Determined by `BACKUP_REMOTES` (e.g., `S3:my-bucket/backups`)
+- **Backup filename**: `vaultwarden-YYYYMMDD-HHMMSS.[tar.gz|tar|tar.gz.enc]`
+- **Storage location**: User-specified path in `BACKUP_REMOTES`, can be on S3 or other remotes
+
 ## Deployment
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `NODE_ROLE` | `primary` | `primary` (read/write) or `secondary` (read-only DR) |
 | `DEPLOYMENT_MODE` | `persistent` | `persistent` (always-on) or `serverless` (scale-to-zero) |
-| `PRIMARY_SYNC_INTERVAL` | `300` | File upload interval in seconds (primary only) |
-| `SECONDARY_SYNC_INTERVAL` | `3600` | Data refresh interval in seconds (secondary only) |
+| `PRIMARY_SYNC_INTERVAL` | `300` | File sync interval in seconds (primary) |
+| `SECONDARY_SYNC_INTERVAL` | `3600` | Data refresh interval in seconds (secondary) |
+| `FINAL_UPLOAD_TIMEOUT` | `30` | Seconds to wait for sync upload during shutdown |
 | `RCLONE_REMOTE_NAME` | `S3` | rclone remote name |
 | `HEALTHCHECK_MAX_SYNC_AGE` | `600` | Max seconds since last sync before unhealthy |
 
@@ -40,17 +69,21 @@ Used by Litestream (database replication) and rclone (file sync). All fields are
 | `secondary` + `persistent` | Always-on read-only DR standby | High availability |
 | `secondary` + `serverless` | On-demand read-only DR standby | Cost-optimized DR |
 
-### Serverless
+### Serverless Deployments
 
-For scale-to-zero platforms, set `DEPLOYMENT_MODE=serverless`. Requirements:
+For scale-to-zero platforms, set `DEPLOYMENT_MODE=serverless`.
+
+**Requirements:**
 - `max-instances: 1` (SQLite requires single writer)
 - `stop_grace_period: 120s`
 - `ENABLE_WEBSOCKET=false` (allows scale-to-zero)
 - `BACKUP_ENABLED=false` (cron prevents scale-to-zero)
 
-**Note:** This image sets `I_REALLY_WANT_VOLATILE_STORAGE=true` by default. This is a Vaultwarden safety flag that allows running without persistent volumes. Since all data is replicated to S3 via Litestream and rclone, volatile local storage is acceptable and expected in serverless deployments.
+**Note:** This image sets `I_REALLY_WANT_VOLATILE_STORAGE=true` by default (a Vaultwarden safety flag). Since all data is replicated to S3 via Litestream and rclone, volatile local storage is acceptable in serverless deployments.
 
 ## Litestream (Database Replication)
+
+Continuous SQLite replication to S3 via write-ahead log (WAL) streaming.
 
 > **Documentation:** [Litestream Configuration Reference](https://litestream.io/reference/config/)
 
@@ -62,7 +95,7 @@ For scale-to-zero platforms, set `DEPLOYMENT_MODE=serverless`. Requirements:
 | `LITESTREAM_VALIDATION_INTERVAL` | — | Automatic replica validation (non-functional in v0.5.x) |
 | `LITESTREAM_DB_PATH` | `/data/db.sqlite3` | Local database file path |
 | `LITESTREAM_REPLICA_PATH` | `<S3_PREFIX>/db.sqlite3` | S3 replica path (auto-derived) |
-| `LITESTREAM_SHUTDOWN_TIMEOUT` | `30` | Seconds to flush WAL before forced shutdown |
+| `LITESTREAM_SHUTDOWN_TIMEOUT` | `15` | Seconds to flush WAL before forced shutdown |
 | `LITESTREAM_FORCE_PATH_STYLE` | `false` | Path-style S3 URLs (required for MinIO, Ceph) |
 | `LITESTREAM_SKIP_VERIFY` | `false` | Skip TLS certificate verification |
 
@@ -86,19 +119,52 @@ Scheduled tar archives with retention and multi-destination support.
 | `BACKUP_ON_STARTUP` | `false` | Run backup immediately on startup |
 | `BACKUP_SHUTDOWN_TIMEOUT` | `60` | Seconds to wait for in-progress backup |
 
-### Multi-Destination
+### Graceful Shutdown Budget
 
-Replicate to additional remotes ([rclone docs](https://rclone.org/docs/#configure-remotes-with-environment-variables)):
+Steps 2, 3, 5 run in parallel. Step 4 waits for Step 3 completion.
+
+| Step | Env Var | Default | Typical |
+|------|---------|---------|----------|
+| 1. Stop sync loop | — | <1s | <1s |
+| 2. Wait snapshot backup | `BACKUP_SHUTDOWN_TIMEOUT` | 60s | 0s |
+| 3. Flush Litestream WAL | `LITESTREAM_SHUTDOWN_TIMEOUT` | 15s | 2–5s |
+| 4. Sync upload | `FINAL_UPLOAD_TIMEOUT` | 30s | 5–15s |
+| 5. Stop Tailscale | — | 15s | 2–5s |
+
+**Worst case:** `max(60, 15+30, 15)` = **60s**
+
+**Total timeout** (`stop_grace_period` in docker-compose.yml) should be at least 10s more than worst case. Default 120s provides ample buffer.
+
+If you increase timeout values, adjust `stop_grace_period` accordingly:
+```
+stop_grace_period ≥ max(BACKUP_SHUTDOWN_TIMEOUT,
+                        LITESTREAM_SHUTDOWN_TIMEOUT + FINAL_UPLOAD_TIMEOUT) + buffer
+```
+
+### Usage Examples
+
+**Single destination:**
+```bash
+BACKUP_ENABLED=true
+BACKUP_REMOTES=S3:my-bucket/backups
+```
+
+**Multiple destinations:**
+
+Upload to multiple remotes using rclone ([rclone docs](https://rclone.org/docs/#configure-remotes-with-environment-variables)):
 
 ```bash
+# Configure Google Drive remote via environment variables
 RCLONE_CONFIG_GDRIVE_TYPE=drive
 RCLONE_CONFIG_GDRIVE_TOKEN={"access_token":"...", "refresh_token":"..."}
+
+# Upload to both S3 and Google Drive
 BACKUP_REMOTES=S3:my-bucket/vw-backups, GDRIVE:vw-backup
 ```
 
-### Backup on Startup
+**Run backup on startup:**
 
-Run backup immediately on container start:
+Execute immediately on container start (in addition to scheduled backups):
 
 ```bash
 BACKUP_ENABLED=true
@@ -106,47 +172,81 @@ BACKUP_ON_STARTUP=true
 BACKUP_REMOTES=S3:my-bucket/vw-backups
 ```
 
-### Restore from Backup
+### Restore Procedure
+
+To restore from a backup archive:
 
 ```bash
-# tar.gz (compressed)
-tar -xzf vaultwarden-*.tar.gz -C /data
+# Compressed (tar.gz)
+tar -xzf vaultwarden-20260211-120000.tar.gz -C /data
 
-# tar (uncompressed)
-tar -xf vaultwarden-*.tar -C /data
+# Uncompressed (tar)
+tar -xf vaultwarden-20260211-120000.tar -C /data
 
-# Encrypted (will prompt for password)
-openssl enc -d -aes-256-cbc -pbkdf2 -in vaultwarden-*.tar.gz.enc | tar -xz -C /data
+# Encrypted (tar.gz.enc) — prompts for password
+openssl enc -d -aes-256-cbc -pbkdf2 -in vaultwarden-20260211-120000.tar.gz.enc | tar -xz -C /data
 ```
 
 ## Notifications (Optional)
 
-HTTP ping notifications for monitoring backup and sync operations.
+HTTP ping endpoints for monitoring backup and sync operations via external monitoring services.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `NOTIFICATION_URL` | — | HTTP ping URL for monitoring events |
+| `NOTIFICATION_URL` | — | Base HTTP(S) URL for notifications |
 | `NOTIFICATION_EVENTS` | — | Events to notify (comma-separated)<br>Leave empty to notify on all events |
-| `NOTIFICATION_TIMEOUT` | `10` | curl timeout in seconds for notification requests |
+| `NOTIFICATION_TIMEOUT` | `10` | HTTP request timeout in seconds |
 
-**Notification endpoints:**
-- **Success**: `GET $NOTIFICATION_URL` (backup_success)
-- **Failure**: `GET $NOTIFICATION_URL/fail` (backup_failure, sync_error)
+### Protocol
 
-**Supported events:**
-- `backup_success` — Scheduled backup completed successfully
-- `backup_failure` — Scheduled backup failed
-- `sync_error` — File sync operation failed (primary upload or secondary download)
+Uses standard HTTP GET requests:
 
-## Advanced
+**Success:**
+```bash
+GET $NOTIFICATION_URL
+```
 
-> **rclone documentation:** [Rclone Docs](https://rclone.org/docs/)
+**Failure:**
+```bash
+GET $NOTIFICATION_URL/fail
+```
+
+### Supported Events
+
+| Event | When | Endpoint |
+|-------|------|----------|
+| `backup_success` | Scheduled backup completed | `$NOTIFICATION_URL` |
+| `backup_failure` | Scheduled backup failed | `$NOTIFICATION_URL/fail` |
+| `sync_error` | File sync failed (upload/download) | `$NOTIFICATION_URL/fail` |
+
+### Usage
+
+**Basic configuration:**
+```bash
+NOTIFICATION_URL=https://your-monitoring-service.com/ping/YOUR_ID
+```
+
+**Filter specific events:**
+```bash
+NOTIFICATION_URL=https://your-monitoring-service.com/ping/YOUR_ID
+NOTIFICATION_EVENTS=backup_success,backup_failure
+```
+
+**Note:** Notifications are best-effort only and never block backup/sync operations.
+
+## Advanced Options
+
+Additional configuration for rclone operations.
+
+> **Documentation:** [Rclone Docs](https://rclone.org/docs/)
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `RCLONE_FLAGS` | — | Additional rclone flags for all operations<br>Example: `--transfers 16 --checkers 32` |
 
 ## Tailscale (Optional)
+
+Mesh VPN for private access. Compatible with Tailscale cloud and self-hosted Headscale.
 
 > **Documentation:** [Tailscale CLI Reference](https://tailscale.com/kb/1080/cli)
 
@@ -164,21 +264,36 @@ HTTP ping notifications for monitoring backup and sync operations.
 
 ### Usage Examples
 
+**Basic private network:**
 ```bash
-# Basic — private tailnet access (ephemeral by default with OAuth keys)
 TAILSCALE_ENABLED=true
 TAILSCALE_AUTHKEY=tskey-client-xxxxx
 TAILSCALE_TAGS=tag:container
+```
+Access via private tailnet only.
 
-# HTTPS via Serve (auto TLS)
+**With HTTPS (Tailscale Serve):**
+```bash
+TAILSCALE_ENABLED=true
+TAILSCALE_AUTHKEY=tskey-client-xxxxx
 TAILSCALE_SERVE_PORT=80
-# -> https://vaultwarden.<tailnet>.ts.net
+```
+Accessible at: `https://vaultwarden.<tailnet>.ts.net` (automatic TLS).
 
-# Public via Funnel (requires ACL policy)
+**Public internet (Tailscale Funnel):**
+```bash
+TAILSCALE_ENABLED=true
+TAILSCALE_AUTHKEY=tskey-client-xxxxx
+TAILSCALE_SERVE_PORT=80
 TAILSCALE_FUNNEL=true
+```
+Requires ACL policy allowing Funnel.
 
-# Self-hosted with Headscale
+**Self-hosted (Headscale):**
+```bash
+TAILSCALE_ENABLED=true
+TAILSCALE_AUTHKEY=your-headscale-key
 TAILSCALE_LOGIN_SERVER=https://headscale.example.com
 ```
 
-Containers execute `tailscale logout` on shutdown to ensure consistent DNS URLs.
+**Note:** Containers execute `tailscale logout` on shutdown to ensure consistent DNS URLs across restarts.
