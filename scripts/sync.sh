@@ -101,8 +101,9 @@ download_and_unpack() {
   _du_tmp="/tmp/${_du_tar}"
   _du_stage="/data/.tmp-${_du_tar%.tar}"
 
-  # Check if tar exists on remote
-  if ! rclone_safe lsf "${_du_base}/${_du_tar}" >/dev/null 2>&1; then
+  # Check if tar exists on remote (verify lsf output, not just exit code)
+  _du_listed=$(rclone_safe lsf "${_du_base}/${_du_tar}" 2>/dev/null || true)
+  if [ -z "$_du_listed" ]; then
     return 0
   fi
 
@@ -110,6 +111,12 @@ download_and_unpack() {
     echo "[sync] ERROR: failed to download ${_du_tar}" >&2
     rm -f "$_du_tmp"
     return 1
+  fi
+
+  # Verify file was actually downloaded
+  if [ ! -f "$_du_tmp" ]; then
+    echo "[sync] ${_du_tar} not found on remote, skipping" >&2
+    return 0
   fi
 
   # Extract to staging directory
@@ -153,7 +160,7 @@ sync_upload() {
   # ── Attachments ──
   _su_count=$(find /data/attachments -type f 2>/dev/null | wc -l | tr -d ' ')
   if [ "$_su_count" -eq 0 ]; then
-    if rclone_safe lsf "${_su_base}/attachments.tar" >/dev/null 2>&1; then
+    if rclone_safe lsf "${_su_base}/attachments.tar" 2>/dev/null | grep -q .; then
       echo "[sync] ERROR: local attachments empty but remote has data, refusing upload" >&2
       return 1
     fi
@@ -166,7 +173,7 @@ sync_upload() {
   # ── Sends ──
   _su_count=$(find /data/sends -type f 2>/dev/null | wc -l | tr -d ' ')
   if [ "$_su_count" -eq 0 ]; then
-    if rclone_safe lsf "${_su_base}/sends.tar" >/dev/null 2>&1; then
+    if rclone_safe lsf "${_su_base}/sends.tar" 2>/dev/null | grep -q .; then
       echo "[sync] ERROR: local sends empty but remote has data, refusing upload" >&2
       return 1
     fi
@@ -199,7 +206,7 @@ sync_upload() {
   if [ "$_su_quick" != "quick" ] && [ -d /data/icon_cache ]; then
     _su_count=$(find /data/icon_cache -type f 2>/dev/null | wc -l | tr -d ' ')
     if [ "$_su_count" -eq 0 ]; then
-      if rclone_safe lsf "${_su_base}/icon_cache.tar" >/dev/null 2>&1; then
+      if rclone_safe lsf "${_su_base}/icon_cache.tar" 2>/dev/null | grep -q .; then
         echo "[sync] WARNING: local icon_cache empty but remote has data, skipping" >&2
       fi
     else
@@ -237,13 +244,16 @@ sync_download() {
 
   # ── Config files (extract directly to /data) ──
   _sd_tmp="/tmp/config.tar"
-  if rclone_safe lsf "${_sd_base}/config.tar" >/dev/null 2>&1; then
+  _sd_listed=$(rclone_safe lsf "${_sd_base}/config.tar" 2>/dev/null || true)
+  if [ -n "$_sd_listed" ]; then
     if ! rclone_safe copyto "${_sd_base}/config.tar" "$_sd_tmp"; then
       echo "[sync] ERROR: failed to download config.tar" >&2
       rm -f "$_sd_tmp"
       return 1
     fi
-    if ! tar -xf "$_sd_tmp" -C /data; then
+    if [ ! -f "$_sd_tmp" ]; then
+      echo "[sync] config.tar not found on remote, skipping" >&2
+    elif ! tar -xf "$_sd_tmp" -C /data; then
       echo "[sync] ERROR: failed to extract config.tar" >&2
       rm -f "$_sd_tmp"
       return 1
