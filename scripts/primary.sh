@@ -26,15 +26,17 @@ shutdown_all() {
   _sd_tailscale_pid=""
 
   if [ -n "$BACKUP_PID" ] && kill -0 "$BACKUP_PID" 2>/dev/null; then
+    # Signal backup loop to exit after current operation completes
+    kill "$BACKUP_PID" 2>/dev/null || true
     (
       _t="$BACKUP_SHUTDOWN_TIMEOUT"
-      echo "[primary] waiting for snapshot backup (timeout ${_t}s)..." >&2
+      echo "[primary] stopping backup loop (timeout ${_t}s)..." >&2
       while [ "$_t" -gt 0 ] && kill -0 "$BACKUP_PID" 2>/dev/null; do
         sleep 1; _t=$((_t - 1))
       done
       if kill -0 "$BACKUP_PID" 2>/dev/null; then
         echo "[primary] WARNING: snapshot backup timeout, forcing kill" >&2
-        kill "$BACKUP_PID" 2>/dev/null || true
+        kill -9 "$BACKUP_PID" 2>/dev/null || true
       fi
     ) &
     _sd_backup_pid=$!
@@ -151,8 +153,12 @@ fi
 
 echo "[primary] starting sync loop (interval=${PRIMARY_SYNC_INTERVAL}s)" >&2
 (
-  while true; do
-    sleep "$PRIMARY_SYNC_INTERVAL"
+  STOP_REQUESTED=""
+  trap 'STOP_REQUESTED=1' TERM
+  while [ -z "$STOP_REQUESTED" ]; do
+    sleep "$PRIMARY_SYNC_INTERVAL" &
+    wait $! 2>/dev/null || true
+    [ -n "$STOP_REQUESTED" ] && break
     if sync_upload; then
       write_sync_status "ok"
       echo "[primary] sync completed" >&2
@@ -162,15 +168,20 @@ echo "[primary] starting sync loop (interval=${PRIMARY_SYNC_INTERVAL}s)" >&2
       send_notification "sync_error" "/fail"
     fi
   done
+  echo "[primary] sync loop exited gracefully" >&2
 ) &
 SYNC_PID=$!
 
 if [ "$BACKUP_ENABLED" = "true" ]; then
   echo "[primary] backup schedule: ${BACKUP_CRON}" >&2
   (
+    STOP_REQUESTED=""
+    trap 'STOP_REQUESTED=1' TERM
     last_run=""
-    while true; do
-      sleep 30
+    while [ -z "$STOP_REQUESTED" ]; do
+      sleep 30 &
+      wait $! 2>/dev/null || true
+      [ -n "$STOP_REQUESTED" ] && break
       if cron_matches_now "$BACKUP_CRON"; then
         mark=$(date +%Y%m%d%H%M)
         if [ "$mark" != "$last_run" ]; then
@@ -179,9 +190,11 @@ if [ "$BACKUP_ENABLED" = "true" ]; then
           if ! create_backup; then
             echo "[primary] WARNING: backup failed" >&2
           fi
+          [ -n "$STOP_REQUESTED" ] && break
         fi
       fi
     done
+    echo "[primary] backup loop exited gracefully" >&2
   ) &
   BACKUP_PID=$!
 fi

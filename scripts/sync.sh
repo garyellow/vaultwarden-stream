@@ -38,8 +38,10 @@ remote_base() {
 }
 
 rclone_safe() {
+  # Default timeouts to prevent hangs (connection: 30s, I/O idle: 5m)
+  # User's RCLONE_FLAGS can override these defaults by specifying the same options
   # shellcheck disable=SC2086  # intentional word splitting for multiple flags
-  rclone ${RCLONE_FLAGS:-} "$@"
+  rclone --contimeout 30s --timeout 300s ${RCLONE_FLAGS:-} "$@"
 }
 
 # ── Status tracking ────────────────────────────────────────────────
