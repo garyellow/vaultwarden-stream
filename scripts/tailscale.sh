@@ -8,7 +8,7 @@ TAILSCALED_PID_FILE="/var/run/tailscaled.pid"
 # ── Start ─────────────────────────────────────────────────────────────────
 
 tailscale_start() {
-  if [ "${TAILSCALE_ENABLED:-false}" != "true" ]; then
+  if [ "$TAILSCALE_ENABLED" != "true" ]; then
     return 0
   fi
 
@@ -54,33 +54,31 @@ tailscale_start() {
     return 1
   fi
 
-  # Configure Serve / Funnel
-  if [ -n "${TAILSCALE_SERVE_PORT:-}" ]; then
-    serve_mode="${TAILSCALE_SERVE_MODE:-https}"
+  # Configure Serve / Funnel (always enabled when Tailscale is active)
+  serve_mode="$TAILSCALE_SERVE_MODE"
 
-    if [ "${TAILSCALE_FUNNEL:-false}" = "true" ] && [ "$serve_mode" != "https" ]; then
-      echo "[tailscale] ERROR: TAILSCALE_FUNNEL=true supports only TAILSCALE_SERVE_MODE=https" >&2
-      return 1
-    fi
+  if [ "$TAILSCALE_FUNNEL" = "true" ] && [ "$serve_mode" != "https" ]; then
+    echo "[tailscale] ERROR: TAILSCALE_FUNNEL=true supports only TAILSCALE_SERVE_MODE=https" >&2
+    return 1
+  fi
 
-    if [ "${TAILSCALE_FUNNEL:-false}" = "true" ]; then
-      echo "[tailscale] enabling Funnel (HTTPS → localhost:${TAILSCALE_SERVE_PORT})" >&2
-      tailscale funnel --bg "${TAILSCALE_SERVE_PORT}" || \
-        echo "[tailscale] WARNING: funnel setup failed (check ACL policy)" >&2
-    else
-      case "$serve_mode" in
-        tls-terminated-tcp)
-          echo "[tailscale] enabling Serve (TLS-terminated TCP:443 → localhost:${TAILSCALE_SERVE_PORT})" >&2
-          tailscale serve --bg --tls-terminated-tcp=443 "tcp://localhost:${TAILSCALE_SERVE_PORT}" || \
-            echo "[tailscale] WARNING: serve setup failed" >&2
-          ;;
-        *)
-          echo "[tailscale] enabling Serve (HTTPS → localhost:${TAILSCALE_SERVE_PORT})" >&2
-          tailscale serve --bg "${TAILSCALE_SERVE_PORT}" || \
-            echo "[tailscale] WARNING: serve setup failed" >&2
-          ;;
-      esac
-    fi
+  if [ "$TAILSCALE_FUNNEL" = "true" ]; then
+    echo "[tailscale] enabling Funnel (HTTPS → localhost:${TAILSCALE_SERVE_PORT})" >&2
+    tailscale funnel --bg "${TAILSCALE_SERVE_PORT}" || \
+      echo "[tailscale] WARNING: funnel setup failed (check ACL policy)" >&2
+  else
+    case "$serve_mode" in
+      tls-terminated-tcp)
+        echo "[tailscale] enabling Serve (TLS-terminated TCP:443 → localhost:${TAILSCALE_SERVE_PORT})" >&2
+        tailscale serve --bg --tls-terminated-tcp=443 "tcp://localhost:${TAILSCALE_SERVE_PORT}" || \
+          echo "[tailscale] WARNING: serve setup failed" >&2
+        ;;
+      *)
+        echo "[tailscale] enabling Serve (HTTPS → localhost:${TAILSCALE_SERVE_PORT})" >&2
+        tailscale serve --bg "${TAILSCALE_SERVE_PORT}" || \
+          echo "[tailscale] WARNING: serve setup failed" >&2
+        ;;
+    esac
   fi
 
   ts_ip=$(tailscale ip -4 2>/dev/null || echo "unknown")
@@ -90,16 +88,16 @@ tailscale_start() {
 # ── Stop ──────────────────────────────────────────────────────────────────
 
 tailscale_stop() {
-  if [ "${TAILSCALE_ENABLED:-false}" != "true" ]; then
+  if [ "$TAILSCALE_ENABLED" != "true" ]; then
     return 0
   fi
 
   echo "[tailscale] shutting down..." >&2
 
-  # Only turn off funnel/serve if they were configured during start
-  if [ "${TAILSCALE_FUNNEL:-false}" = "true" ] && [ -n "${TAILSCALE_SERVE_PORT:-}" ]; then
+  # Turn off funnel/serve (always configured when enabled)
+  if [ "$TAILSCALE_FUNNEL" = "true" ]; then
     timeout 5 tailscale funnel off >/dev/null 2>&1 || true
-  elif [ -n "${TAILSCALE_SERVE_PORT:-}" ]; then
+  else
     timeout 5 tailscale serve off >/dev/null 2>&1 || true
   fi
 
@@ -118,7 +116,7 @@ tailscale_stop() {
 # ── Health ────────────────────────────────────────────────────────────────
 
 tailscale_healthy() {
-  if [ "${TAILSCALE_ENABLED:-false}" != "true" ]; then
+  if [ "$TAILSCALE_ENABLED" != "true" ]; then
     return 0
   fi
 

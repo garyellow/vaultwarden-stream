@@ -43,7 +43,7 @@ Files are packed into uncompressed tar archives before upload (reducing API call
 ```
 
 **Notes:**
-- **Sync files**: Only uploaded when content changes (md5 hash comparison)
+- **Sync files**: Only uploaded when content changes (md5 hash comparison); each tar file can be individually enabled/disabled via `SYNC_INCLUDE_*` variables
 - **Backup destination**: Determined by `BACKUP_REMOTES` (e.g., `S3:my-bucket/backups`)
 - **Backup filename**: `vaultwarden-YYYYMMDD-HHMMSS.[tar.gz|tar|tar.gz.enc]`
 - **Storage location**: User-specified path in `BACKUP_REMOTES`, can be on S3 or other remotes
@@ -56,7 +56,6 @@ Files are packed into uncompressed tar archives before upload (reducing API call
 | `DEPLOYMENT_MODE` | `persistent` | `persistent` (always-on) or `serverless` (scale-to-zero) |
 | `PRIMARY_SYNC_INTERVAL` | `300` | File sync interval in seconds (primary) |
 | `SECONDARY_SYNC_INTERVAL` | `3600` | Data refresh interval in seconds (secondary) |
-| `FINAL_UPLOAD_TIMEOUT` | `60` | Seconds to wait for sync upload during shutdown |
 | `RCLONE_REMOTE_NAME` | `S3` | rclone remote name |
 | `HEALTHCHECK_MAX_SYNC_AGE` | `600` | Max seconds since last sync before unhealthy |
 
@@ -99,6 +98,18 @@ Continuous SQLite replication to S3 via write-ahead log (WAL) streaming.
 | `LITESTREAM_FORCE_PATH_STYLE` | `false` | Path-style S3 URLs (required for MinIO, Ceph) |
 | `LITESTREAM_SKIP_VERIFY` | `false` | Skip TLS certificate verification |
 
+## Sync (File Replication)
+
+Tar-based file sync to/from S3 via rclone. Each data type can be individually enabled or disabled.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SYNC_INCLUDE_ATTACHMENTS` | `true` | Sync vault attachments to/from S3 |
+| `SYNC_INCLUDE_SENDS` | `true` | Sync vault sends to/from S3 |
+| `SYNC_INCLUDE_CONFIG` | `true` | Sync RSA keys and config.json to/from S3 |
+| `SYNC_INCLUDE_ICON_CACHE` | `false` | Sync favicon cache to/from S3 (icons can be re-fetched) |
+| `SYNC_SHUTDOWN_TIMEOUT` | `60` | Seconds to wait for sync upload during shutdown |
+
 ## Backup (Optional)
 
 Scheduled tar archives with retention and multi-destination support.
@@ -137,7 +148,7 @@ Steps 2, 3, 5 run in parallel. Step 4 waits for Step 3 completion.
 | 1. Stop sync loop | — | <1s | <1s | Immediate |
 | 2. Wait snapshot backup | `BACKUP_SHUTDOWN_TIMEOUT` | 180s | 0–60s | Only if backup in progress, **parallelized copies** |
 | 3. Flush Litestream WAL | `LITESTREAM_SHUTDOWN_TIMEOUT` | 30s | 2–10s | Sequential: stop app → flush WAL |
-| 4. Sync upload | `FINAL_UPLOAD_TIMEOUT` | 60s | 5–20s | **Parallelized** (was 5–30s) |
+| 4. Sync upload | `SYNC_SHUTDOWN_TIMEOUT` | 60s | 5–20s | **Parallelized** |
 | 5. Stop Tailscale | — | 15s | 2–5s | Has internal timeouts |
 
 **Worst case:** `max(180, 30+60, 15)` = **180s**
@@ -147,7 +158,7 @@ Steps 2, 3, 5 run in parallel. Step 4 waits for Step 3 completion.
 If you need to increase timeout values further, adjust `stop_grace_period` accordingly:
 ```
 stop_grace_period ≥ max(BACKUP_SHUTDOWN_TIMEOUT,
-                        LITESTREAM_SHUTDOWN_TIMEOUT + FINAL_UPLOAD_TIMEOUT) + 60s buffer
+                        LITESTREAM_SHUTDOWN_TIMEOUT + SYNC_SHUTDOWN_TIMEOUT) + 60s buffer
 
 Recommended: Use round numbers (300s = 5min, 600s = 10min) for easier management.
 ```

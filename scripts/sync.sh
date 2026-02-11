@@ -48,7 +48,7 @@ write_sync_status() {
   _ws_status="$1"
   _ws_ts=$(date +%s)
   _ws_iso=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-  _ws_role="${NODE_ROLE:-primary}"
+  _ws_role="$NODE_ROLE"
   cat > "$SYNC_STATUS_FILE" <<EOF
 {"status":"${_ws_status}","role":"${_ws_role}","timestamp":${_ws_ts},"datetime":"${_ws_iso}"}
 EOF
@@ -139,9 +139,8 @@ download_and_unpack() {
 
 # ── Upload (primary) ─────────────────────────────────────────────
 
-# Upload data to S3 as tar archives (pass 'quick' to skip icon_cache)
+# Upload data to S3 as tar archives
 sync_upload() {
-  _su_quick="${1:-}"
   _su_base="$(remote_base)"
 
   # Verify S3 connectivity
@@ -156,62 +155,68 @@ sync_upload() {
   _su_config_pid=""
   _su_icon_pid=""
 
-  # ── Attachments (background) ──
-  (
-    _su_count=$(find /data/attachments -type f 2>/dev/null | wc -l | tr -d ' ')
-    if [ "$_su_count" -eq 0 ]; then
-      if rclone_safe lsf "${_su_base}/attachments.tar" 2>/dev/null | grep -q .; then
-        echo "[sync] ERROR: local attachments empty but remote has data, refusing upload" >&2
-        exit 1
+  # Attachments
+  if [ "$SYNC_INCLUDE_ATTACHMENTS" = "true" ]; then
+    (
+      _su_count=$(find /data/attachments -type f 2>/dev/null | wc -l | tr -d ' ')
+      if [ "$_su_count" -eq 0 ]; then
+        if rclone_safe lsf "${_su_base}/attachments.tar" 2>/dev/null | grep -q .; then
+          echo "[sync] ERROR: local attachments empty but remote has data, refusing upload" >&2
+          exit 1
+        fi
+      else
+        if ! pack_and_upload /data/attachments attachments.tar; then
+          exit 1
+        fi
       fi
-    else
-      if ! pack_and_upload /data/attachments attachments.tar; then
-        exit 1
-      fi
-    fi
-  ) &
-  _su_attach_pid=$!
+    ) &
+    _su_attach_pid=$!
+  fi
 
   # Sends
-  (
-    _su_count=$(find /data/sends -type f 2>/dev/null | wc -l | tr -d ' ')
-    if [ "$_su_count" -eq 0 ]; then
-      if rclone_safe lsf "${_su_base}/sends.tar" 2>/dev/null | grep -q .; then
-        echo "[sync] ERROR: local sends empty but remote has data, refusing upload" >&2
-        exit 1
+  if [ "$SYNC_INCLUDE_SENDS" = "true" ]; then
+    (
+      _su_count=$(find /data/sends -type f 2>/dev/null | wc -l | tr -d ' ')
+      if [ "$_su_count" -eq 0 ]; then
+        if rclone_safe lsf "${_su_base}/sends.tar" 2>/dev/null | grep -q .; then
+          echo "[sync] ERROR: local sends empty but remote has data, refusing upload" >&2
+          exit 1
+        fi
+      else
+        if ! pack_and_upload /data/sends sends.tar; then
+          exit 1
+        fi
       fi
-    else
-      if ! pack_and_upload /data/sends sends.tar; then
-        exit 1
-      fi
-    fi
-  ) &
-  _su_sends_pid=$!
+    ) &
+    _su_sends_pid=$!
+  fi
 
   # Config files
-  (
-    _su_config="/tmp/config-stage-$$"
-    rm -rf "$_su_config"
-    mkdir -p "$_su_config"
-    _su_has=0
-    for _su_file in $CORE_FILES; do
-      if [ -f "/data/${_su_file}" ]; then
-        cp -a "/data/${_su_file}" "$_su_config/"
-        _su_has=1
+  if [ "$SYNC_INCLUDE_CONFIG" = "true" ]; then
+    (
+      _su_config="/tmp/config-stage-$$"
+      rm -rf "$_su_config"
+      mkdir -p "$_su_config"
+      _su_has=0
+      for _su_file in $CORE_FILES; do
+        if [ -f "/data/${_su_file}" ]; then
+          cp -a "/data/${_su_file}" "$_su_config/"
+          _su_has=1
+        fi
+      done
+      if [ "$_su_has" -eq 1 ]; then
+        if ! pack_and_upload "$_su_config" config.tar; then
+          rm -rf "$_su_config"
+          exit 1
+        fi
       fi
-    done
-    if [ "$_su_has" -eq 1 ]; then
-      if ! pack_and_upload "$_su_config" config.tar; then
-        rm -rf "$_su_config"
-        exit 1
-      fi
-    fi
-    rm -rf "$_su_config"
-  ) &
-  _su_config_pid=$!
+      rm -rf "$_su_config"
+    ) &
+    _su_config_pid=$!
+  fi
 
-  # Icon cache (skip in quick mode)
-  if [ "$_su_quick" != "quick" ] && [ -d /data/icon_cache ]; then
+  # Icon cache
+  if [ "$SYNC_INCLUDE_ICON_CACHE" = "true" ] && [ -d /data/icon_cache ]; then
     (
       _su_count=$(find /data/icon_cache -type f 2>/dev/null | wc -l | tr -d ' ')
       if [ "$_su_count" -eq 0 ]; then
@@ -224,8 +229,6 @@ sync_upload() {
       fi
     ) &
     _su_icon_pid=$!
-  elif [ "$_su_quick" = "quick" ]; then
-    echo "[sync] skipping icon_cache in quick mode" >&2
   fi
 
   # Wait for critical tasks
@@ -271,51 +274,59 @@ sync_download() {
   _sd_icon_pid=""
 
   # Attachments
-  (
-    if ! download_and_unpack attachments.tar /data/attachments; then
-      exit 1
-    fi
-  ) &
-  _sd_attach_pid=$!
+  if [ "$SYNC_INCLUDE_ATTACHMENTS" = "true" ]; then
+    (
+      if ! download_and_unpack attachments.tar /data/attachments; then
+        exit 1
+      fi
+    ) &
+    _sd_attach_pid=$!
+  fi
 
   # Sends
-  (
-    if ! download_and_unpack sends.tar /data/sends; then
-      exit 1
-    fi
-  ) &
-  _sd_sends_pid=$!
+  if [ "$SYNC_INCLUDE_SENDS" = "true" ]; then
+    (
+      if ! download_and_unpack sends.tar /data/sends; then
+        exit 1
+      fi
+    ) &
+    _sd_sends_pid=$!
+  fi
 
   # Config files
-  (
-    _sd_tmp="/tmp/config-download-$$.tar"
-    _sd_listed=$(rclone_safe lsf "${_sd_base}/config.tar" 2>/dev/null || true)
-    if [ -n "$_sd_listed" ]; then
-      if ! rclone_safe copyto "${_sd_base}/config.tar" "$_sd_tmp"; then
-        echo "[sync] ERROR: failed to download config.tar" >&2
+  if [ "$SYNC_INCLUDE_CONFIG" = "true" ]; then
+    (
+      _sd_tmp="/tmp/config-download-$$.tar"
+      _sd_listed=$(rclone_safe lsf "${_sd_base}/config.tar" 2>/dev/null || true)
+      if [ -n "$_sd_listed" ]; then
+        if ! rclone_safe copyto "${_sd_base}/config.tar" "$_sd_tmp"; then
+          echo "[sync] ERROR: failed to download config.tar" >&2
+          rm -f "$_sd_tmp"
+          exit 1
+        fi
+        if [ ! -f "$_sd_tmp" ]; then
+          echo "[sync] config.tar not found on remote, skipping" >&2
+        elif ! tar -xf "$_sd_tmp" -C /data; then
+          echo "[sync] ERROR: failed to extract config.tar" >&2
+          rm -f "$_sd_tmp"
+          exit 1
+        fi
         rm -f "$_sd_tmp"
-        exit 1
       fi
-      if [ ! -f "$_sd_tmp" ]; then
-        echo "[sync] config.tar not found on remote, skipping" >&2
-      elif ! tar -xf "$_sd_tmp" -C /data; then
-        echo "[sync] ERROR: failed to extract config.tar" >&2
-        rm -f "$_sd_tmp"
-        exit 1
-      fi
-      rm -f "$_sd_tmp"
-    fi
-  ) &
-  _sd_config_pid=$!
+    ) &
+    _sd_config_pid=$!
+  fi
 
   # Icon cache (non-fatal)
-  (
-    if ! download_and_unpack icon_cache.tar /data/icon_cache; then
-      echo "[sync] WARNING: icon_cache download failed" >&2
-      exit 0
-    fi
-  ) &
-  _sd_icon_pid=$!
+  if [ "$SYNC_INCLUDE_ICON_CACHE" = "true" ]; then
+    (
+      if ! download_and_unpack icon_cache.tar /data/icon_cache; then
+        echo "[sync] WARNING: icon_cache download failed" >&2
+        exit 0
+      fi
+    ) &
+    _sd_icon_pid=$!
+  fi
 
   # Wait for critical tasks
   _sd_failed=0

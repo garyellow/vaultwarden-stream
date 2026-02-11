@@ -3,7 +3,8 @@ set -eu
 
 SYNC_STATUS_FILE="/tmp/sync-status.json"
 MAX_SYNC_AGE="$HEALTHCHECK_MAX_SYNC_AGE"
-ROLE="${NODE_ROLE:-primary}"
+ROLE="$NODE_ROLE"
+ROCKET_PORT="${ROCKET_PORT:-80}"  # Vaultwarden default port
 
 # Check if a process with given name is running
 process_running() {
@@ -17,7 +18,7 @@ process_running() {
 }
 
 # Check Vaultwarden HTTP endpoint (both roles)
-if ! curl -sf -o /dev/null "http://127.0.0.1:${ROCKET_PORT:-80}/alive"; then
+if ! curl -sf -o /dev/null "http://127.0.0.1:${ROCKET_PORT}/alive"; then
   echo "UNHEALTHY: vaultwarden HTTP check failed" >&2
   exit 1
 fi
@@ -31,7 +32,7 @@ if [ "$ROLE" = "primary" ]; then
 fi
 
 # Check Tailscale connectivity (if enabled)
-if [ "${TAILSCALE_ENABLED:-false}" = "true" ]; then
+if [ "$TAILSCALE_ENABLED" = "true" ]; then
   if ! tailscale status >/dev/null 2>&1; then
     echo "UNHEALTHY: tailscale not connected" >&2
     exit 1

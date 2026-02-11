@@ -67,8 +67,8 @@ shutdown_all() {
   fi
 
   echo "[primary] syncing files to S3..." >&2
-  ( sync_upload quick ) &
-  _sd_upload_pid=$!; _t="$FINAL_UPLOAD_TIMEOUT"
+  ( sync_upload ) &
+  _sd_upload_pid=$!; _t="$SYNC_SHUTDOWN_TIMEOUT"
   while [ "$_t" -gt 0 ] && kill -0 "$_sd_upload_pid" 2>/dev/null; do
     sleep 1; _t=$((_t - 1))
   done
@@ -139,7 +139,7 @@ fi
 
 write_sync_status "ok"
 
-if [ "${BACKUP_ENABLED:-false}" = "true" ] && [ "${BACKUP_ON_STARTUP:-false}" = "true" ]; then
+if [ "$BACKUP_ENABLED" = "true" ] && [ "$BACKUP_ON_STARTUP" = "true" ]; then
   echo "[primary] running startup backup..." >&2
   if create_backup; then
     echo "[primary] startup backup completed" >&2
@@ -165,7 +165,7 @@ echo "[primary] starting sync loop (interval=${PRIMARY_SYNC_INTERVAL}s)" >&2
 ) &
 SYNC_PID=$!
 
-if [ "${BACKUP_ENABLED:-false}" = "true" ]; then
+if [ "$BACKUP_ENABLED" = "true" ]; then
   echo "[primary] backup schedule: ${BACKUP_CRON}" >&2
   (
     last_run=""

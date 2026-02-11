@@ -30,6 +30,40 @@ validate_boolean() {
   esac
 }
 
+# Validate Litestream duration format (e.g., 1s, 30m, 24h)
+validate_duration() {
+  case "$2" in
+    *[0-9]s|*[0-9]m|*[0-9]h|*[0-9]ms)
+      # Extract numeric part and validate
+      _vd_num=$(echo "$2" | sed 's/[a-z]*$//')
+      case "$_vd_num" in
+        *[!0-9]*|"")
+          echo "[entrypoint] ERROR: $1 has invalid duration format (got: $2)" >&2
+          echo "[entrypoint]   Expected: <number><unit> (e.g., 1s, 30m, 24h)" >&2
+          exit 1
+          ;;
+      esac
+      ;;
+    *)
+      echo "[entrypoint] ERROR: $1 must be a duration with unit (1s, 30m, 24h, etc., got: $2)" >&2
+      exit 1
+      ;;
+  esac
+}
+
+# Validate enum value
+validate_enum() {
+  _ve_var="$1"
+  _ve_val="$2"
+  shift 2
+  for _ve_allowed in "$@"; do
+    [ "$_ve_val" = "$_ve_allowed" ] && return 0
+  done
+  _ve_list=$(printf "%s" "$*" | sed 's/ /, /g')
+  echo "[entrypoint] ERROR: $_ve_var must be one of: $_ve_list (got: $_ve_val)" >&2
+  exit 1
+}
+
 # ── S3 validation ─────────────────────────────────────────────────────────
 
 require_var S3_PROVIDER
@@ -40,6 +74,10 @@ require_var S3_SECRET_ACCESS_KEY
 
 # Normalize S3_PREFIX (strip leading/trailing/duplicate slashes)
 S3_PREFIX=$(echo "$S3_PREFIX" | sed -e 's#^/*##' -e 's#/*$##' -e 's#//*#/#g')
+
+# Validate S3 configuration
+validate_boolean S3_NO_CHECK_BUCKET "$S3_NO_CHECK_BUCKET"
+validate_enum S3_ACL "$S3_ACL" private public-read public-read-write authenticated-read bucket-owner-read bucket-owner-full-control
 
 export S3_PREFIX S3_REGION S3_ACL S3_NO_CHECK_BUCKET
 
@@ -63,9 +101,8 @@ esac
 
 validate_integer PRIMARY_SYNC_INTERVAL "$PRIMARY_SYNC_INTERVAL"
 validate_integer SECONDARY_SYNC_INTERVAL "$SECONDARY_SYNC_INTERVAL"
-validate_integer FINAL_UPLOAD_TIMEOUT "$FINAL_UPLOAD_TIMEOUT"
 
-export NODE_ROLE DEPLOYMENT_MODE PRIMARY_SYNC_INTERVAL SECONDARY_SYNC_INTERVAL FINAL_UPLOAD_TIMEOUT
+export NODE_ROLE DEPLOYMENT_MODE PRIMARY_SYNC_INTERVAL SECONDARY_SYNC_INTERVAL
 
 # ── Litestream configuration ──────────────────────────────────────────────
 
@@ -76,8 +113,16 @@ else
   : "${LITESTREAM_REPLICA_PATH:=db.sqlite3}"
 fi
 
+# Validate Litestream durations
+validate_duration LITESTREAM_SYNC_INTERVAL "$LITESTREAM_SYNC_INTERVAL"
+validate_duration LITESTREAM_SNAPSHOT_INTERVAL "$LITESTREAM_SNAPSHOT_INTERVAL"
+validate_duration LITESTREAM_RETENTION "$LITESTREAM_RETENTION"
+
+# Validate Litestream boolean flags
 validate_boolean LITESTREAM_FORCE_PATH_STYLE "$LITESTREAM_FORCE_PATH_STYLE"
 validate_boolean LITESTREAM_SKIP_VERIFY "$LITESTREAM_SKIP_VERIFY"
+
+# Validate Litestream timeouts
 validate_integer LITESTREAM_SHUTDOWN_TIMEOUT "$LITESTREAM_SHUTDOWN_TIMEOUT"
 validate_integer HEALTHCHECK_MAX_SYNC_AGE "$HEALTHCHECK_MAX_SYNC_AGE"
 
@@ -115,9 +160,22 @@ tmp_litestream_yml="/tmp/litestream.yml.$$"
 grep -v '^[[:space:]]*validation-interval:[[:space:]]*$' /etc/litestream.yml > "$tmp_litestream_yml"
 mv "$tmp_litestream_yml" /etc/litestream.yml
 
+# ── Sync validation ───────────────────────────────────────────────────────
+
+for flag in SYNC_INCLUDE_ATTACHMENTS SYNC_INCLUDE_SENDS SYNC_INCLUDE_CONFIG SYNC_INCLUDE_ICON_CACHE; do
+  eval "val=\${${flag}}"
+  validate_boolean "$flag" "$val"
+  export "$flag=$val"
+done
+
+validate_integer SYNC_SHUTDOWN_TIMEOUT "$SYNC_SHUTDOWN_TIMEOUT"
+export SYNC_SHUTDOWN_TIMEOUT
+
 # ── Backup validation ─────────────────────────────────────────────────────
 
-if [ "${BACKUP_ENABLED:-false}" = "true" ]; then
+validate_boolean BACKUP_ENABLED "$BACKUP_ENABLED"
+
+if [ "$BACKUP_ENABLED" = "true" ]; then
   cron_field_count=$(echo "$BACKUP_CRON" | awk '{print NF}')
   if [ "$cron_field_count" -ne 5 ]; then
     echo "[entrypoint] ERROR: BACKUP_CRON must be a 5-field cron expression (got ${cron_field_count} fields): ${BACKUP_CRON}" >&2
@@ -208,7 +266,11 @@ if [ -n "${NOTIFICATION_URL:-}" ]; then
     NOTIFICATION_EVENTS=$(echo "$NOTIFICATION_EVENTS" | tr -d '[:space:]')
   fi
   export NOTIFICATION_URL NOTIFICATION_EVENTS NOTIFICATION_TIMEOUT
-  echo "[entrypoint] notifications: enabled (events: ${NOTIFICATION_EVENTS:-all})" >&2
+  _events_display="all"
+  if [ -n "$NOTIFICATION_EVENTS" ]; then
+    _events_display="$NOTIFICATION_EVENTS"
+  fi
+  echo "[entrypoint] notifications: enabled (events: $_events_display)" >&2
 fi
 
 # ── rclone advanced ────────────────────────────────────────────
@@ -220,7 +282,14 @@ fi
 
 # ── Tailscale validation ─────────────────────────────────────────────────
 
-if [ "${TAILSCALE_ENABLED:-false}" = "true" ]; then
+validate_boolean TAILSCALE_ENABLED "$TAILSCALE_ENABLED"
+
+if [ "$TAILSCALE_ENABLED" = "true" ]; then
+  # Validate all Tailscale configuration when enabled
+  validate_boolean TAILSCALE_FUNNEL "$TAILSCALE_FUNNEL"
+  validate_integer TAILSCALE_SERVE_PORT "$TAILSCALE_SERVE_PORT"
+  validate_enum TAILSCALE_SERVE_MODE "$TAILSCALE_SERVE_MODE" https tls-terminated-tcp
+
   if ! command -v tailscale >/dev/null 2>&1; then
     echo "[entrypoint] ERROR: TAILSCALE_ENABLED=true but tailscale binary not found" >&2
     exit 1
@@ -229,20 +298,6 @@ if [ "${TAILSCALE_ENABLED:-false}" = "true" ]; then
   if [ -z "${TAILSCALE_AUTHKEY:-}" ]; then
     echo "[entrypoint] ERROR: TAILSCALE_ENABLED=true requires TAILSCALE_AUTHKEY for unattended startup" >&2
     exit 1
-  fi
-
-  if [ -n "${TAILSCALE_SERVE_PORT:-}" ]; then
-    validate_integer TAILSCALE_SERVE_PORT "$TAILSCALE_SERVE_PORT"
-  fi
-
-  if [ -n "${TAILSCALE_SERVE_MODE:-}" ]; then
-    case "$TAILSCALE_SERVE_MODE" in
-      https|tls-terminated-tcp) ;;
-      *)
-        echo "[entrypoint] ERROR: TAILSCALE_SERVE_MODE must be https or tls-terminated-tcp (got: $TAILSCALE_SERVE_MODE)" >&2
-        exit 1
-        ;;
-    esac
   fi
 
   if [ -n "${TAILSCALE_TAGS:-}" ]; then
@@ -264,10 +319,6 @@ if [ "${TAILSCALE_ENABLED:-false}" = "true" ]; then
     done
     export TAILSCALE_TAGS
   fi
-
-  if [ -n "${TAILSCALE_FUNNEL:-}" ]; then
-    validate_boolean TAILSCALE_FUNNEL "${TAILSCALE_FUNNEL}"
-  fi
 fi
 
 # ── Start Tailscale (if enabled) ──────────────────────────────────────────
@@ -285,19 +336,19 @@ case "$NODE_ROLE" in
     echo "[entrypoint] launching primary (vaultwarden + litestream + rclone)" >&2
     echo "[entrypoint] S3: ${S3_PROVIDER} ${S3_BUCKET}/${S3_PREFIX}" >&2
     echo "[entrypoint] file sync interval: ${PRIMARY_SYNC_INTERVAL}s" >&2
-    if [ "${BACKUP_ENABLED:-false}" = "true" ]; then
-      echo "[entrypoint] backup: ${BACKUP_CRON} (${BACKUP_FORMAT:-tar.gz})" >&2
-      [ "${BACKUP_ON_STARTUP:-false}" = "true" ] && echo "[entrypoint]   - startup backup: enabled" >&2
+    if [ "$BACKUP_ENABLED" = "true" ]; then
+      echo "[entrypoint] backup: ${BACKUP_CRON} ($BACKUP_FORMAT)" >&2
+      [ "$BACKUP_ON_STARTUP" = "true" ] && echo "[entrypoint]   - startup backup: enabled" >&2
       [ -n "${NOTIFICATION_URL:-}" ] && echo "[entrypoint]   - notifications: enabled" >&2
     fi
-    if [ -n "${NOTIFICATION_URL:-}" ] && [ "${BACKUP_ENABLED:-false}" = "false" ]; then
+    if [ -n "${NOTIFICATION_URL:-}" ] && [ "$BACKUP_ENABLED" = "false" ]; then
       if [ -n "${NOTIFICATION_EVENTS:-}" ]; then
         echo "[entrypoint] notifications: sync events only" >&2
       else
         echo "[entrypoint] notifications: all events" >&2
       fi
     fi
-    [ "${TAILSCALE_ENABLED:-false}" = "true" ] && echo "[entrypoint] tailscale: enabled" >&2
+    [ "$TAILSCALE_ENABLED" = "true" ] && echo "[entrypoint] tailscale: enabled" >&2
     exec /app/primary.sh
     ;;
   secondary)
@@ -307,7 +358,7 @@ case "$NODE_ROLE" in
       echo "[entrypoint] launching secondary (persistent — refresh every ${SECONDARY_SYNC_INTERVAL}s)" >&2
     fi
     echo "[entrypoint] S3: ${S3_PROVIDER} ${S3_BUCKET}/${S3_PREFIX}" >&2
-    [ "${TAILSCALE_ENABLED:-false}" = "true" ] && echo "[entrypoint] tailscale: enabled" >&2
+    [ "$TAILSCALE_ENABLED" = "true" ] && echo "[entrypoint] tailscale: enabled" >&2
     exec /app/secondary.sh
     ;;
 esac

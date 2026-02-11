@@ -183,7 +183,7 @@ create_backup() {
   timestamp=$(date -u +%Y%m%d-%H%M%S)
   backup_dir="/tmp/vw-backup-${timestamp}"
 
-  format="${BACKUP_FORMAT:-tar.gz}"
+  format="$BACKUP_FORMAT"
   password="${BACKUP_PASSWORD:-}"
 
   case "$format" in
@@ -201,6 +201,14 @@ create_backup() {
   backup_name="vaultwarden-${timestamp}.${ext}"
   mkdir -p "$backup_dir"
 
+  # Verify database file exists and is accessible
+  if [ ! -f "$LITESTREAM_DB_PATH" ]; then
+    echo "[backup] ERROR: database file not found: $LITESTREAM_DB_PATH" >&2
+    rm -rf "$backup_dir"
+    send_notification "backup_failure" "/fail"
+    return 1
+  fi
+
   if ! sqlite3 "$LITESTREAM_DB_PATH" ".backup '${backup_dir}/db.sqlite3'"; then
     echo "[backup] ERROR: database snapshot failed" >&2
     rm -rf "$backup_dir"
@@ -213,7 +221,7 @@ create_backup() {
   _cb_icon_pid=""
 
   # Attachments
-  if [ "${BACKUP_INCLUDE_ATTACHMENTS:-true}" = "true" ]; then
+  if [ "$BACKUP_INCLUDE_ATTACHMENTS" = "true" ]; then
     (
       if [ -d /data/attachments ] && [ "$(ls -A /data/attachments 2>/dev/null)" ]; then
         cp -a /data/attachments "$backup_dir/"
@@ -223,7 +231,7 @@ create_backup() {
   fi
 
   # Sends
-  if [ "${BACKUP_INCLUDE_SENDS:-true}" = "true" ]; then
+  if [ "$BACKUP_INCLUDE_SENDS" = "true" ]; then
     (
       if [ -d /data/sends ] && [ "$(ls -A /data/sends 2>/dev/null)" ]; then
         cp -a /data/sends "$backup_dir/"
@@ -233,7 +241,7 @@ create_backup() {
   fi
 
   # Icon cache
-  if [ "${BACKUP_INCLUDE_ICON_CACHE:-false}" = "true" ]; then
+  if [ "$BACKUP_INCLUDE_ICON_CACHE" = "true" ]; then
     (
       if [ -d /data/icon_cache ] && [ "$(ls -A /data/icon_cache 2>/dev/null)" ]; then
         cp -a /data/icon_cache "$backup_dir/"
@@ -243,7 +251,7 @@ create_backup() {
   fi
 
   # RSA keys and config
-  if [ "${BACKUP_INCLUDE_CONFIG:-true}" = "true" ]; then
+  if [ "$BACKUP_INCLUDE_CONFIG" = "true" ]; then
     for file in $CORE_FILES; do
       [ -f "/data/$file" ] && cp -a "/data/$file" "$backup_dir/"
     done

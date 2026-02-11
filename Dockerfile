@@ -38,22 +38,21 @@ COPY --chmod=0755 scripts/ /app/
 
 # Default environment variables (see .env.example for full docs)
 
-# ── S3 Storage ───────────────────────────────────────────────────────────
+# ── S3 Storage ───────────────────────────────────────────────────────────────
 ENV S3_PREFIX=vaultwarden \
     S3_REGION=auto \
     S3_ACL=private \
     S3_NO_CHECK_BUCKET=true
 
-# ── Deployment ───────────────────────────────────────────────────────────
+# ── Deployment ───────────────────────────────────────────────────────────────
 ENV NODE_ROLE=primary \
     DEPLOYMENT_MODE=persistent \
     PRIMARY_SYNC_INTERVAL=300 \
     SECONDARY_SYNC_INTERVAL=3600 \
-    FINAL_UPLOAD_TIMEOUT=60 \
     RCLONE_REMOTE_NAME=S3 \
     HEALTHCHECK_MAX_SYNC_AGE=600
 
-# ── Litestream ───────────────────────────────────────────────────────────
+# ── Litestream (Database Replication) ────────────────────────────────────────
 ENV LITESTREAM_DB_PATH=/data/db.sqlite3 \
     LITESTREAM_SYNC_INTERVAL=1s \
     LITESTREAM_SNAPSHOT_INTERVAL=30m \
@@ -63,7 +62,14 @@ ENV LITESTREAM_DB_PATH=/data/db.sqlite3 \
     LITESTREAM_FORCE_PATH_STYLE=false \
     LITESTREAM_SKIP_VERIFY=false
 
-# ── Backup ───────────────────────────────────────────────────────────────
+# ── Sync (File Replication) ──────────────────────────────────────────────────
+ENV SYNC_INCLUDE_ATTACHMENTS=true \
+    SYNC_INCLUDE_SENDS=true \
+    SYNC_INCLUDE_CONFIG=true \
+    SYNC_INCLUDE_ICON_CACHE=false \
+    SYNC_SHUTDOWN_TIMEOUT=60
+
+# ── Backup ───────────────────────────────────────────────────────────────────
 ENV BACKUP_ENABLED=false \
     BACKUP_CRON="0 0 * * *" \
     BACKUP_FORMAT=tar.gz \
@@ -77,19 +83,19 @@ ENV BACKUP_ENABLED=false \
     BACKUP_SHUTDOWN_TIMEOUT=180 \
     BACKUP_REMOTES=
 
-# ── Notifications ────────────────────────────────────────────────────────
+# ── Notifications ────────────────────────────────────────────────────────────
 ENV NOTIFICATION_URL= \
     NOTIFICATION_EVENTS= \
     NOTIFICATION_TIMEOUT=10
 
-# ── Tailscale ────────────────────────────────────────────────────────────
+# ── Tailscale ────────────────────────────────────────────────────────────────
 ENV TAILSCALE_ENABLED=false \
     TAILSCALE_HOSTNAME=vaultwarden \
     TAILSCALE_SERVE_PORT=80 \
     TAILSCALE_SERVE_MODE=https \
     TAILSCALE_FUNNEL=false
 
-# ── Volatile Storage ─────────────────────────────────────────────────────
+# ── Volatile Storage ─────────────────────────────────────────────────────────
 ENV I_REALLY_WANT_VOLATILE_STORAGE=true
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
