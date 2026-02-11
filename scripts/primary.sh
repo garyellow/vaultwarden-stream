@@ -16,18 +16,15 @@ shutdown_all() {
   [ -n "$SHUTDOWN_IN_PROGRESS" ] && return 0
   SHUTDOWN_IN_PROGRESS=1
 
-  # ── Step 1: Stop sync loop (immediate) ──
   if [ -n "$SYNC_PID" ] && kill -0 "$SYNC_PID" 2>/dev/null; then
     kill "$SYNC_PID" 2>/dev/null || true
     wait "$SYNC_PID" 2>/dev/null || true
   fi
 
-  # ── Steps 2, 3, 5: Launch in parallel ──
   _sd_backup_pid=""
   _sd_litestream_pid=""
   _sd_tailscale_pid=""
 
-  # Step 2: Wait for in-progress snapshot backup (background)
   if [ -n "$BACKUP_PID" ] && kill -0 "$BACKUP_PID" 2>/dev/null; then
     (
       _t="$BACKUP_SHUTDOWN_TIMEOUT"
@@ -43,7 +40,6 @@ shutdown_all() {
     _sd_backup_pid=$!
   fi
 
-  # Step 3: Stop Litestream — flush WAL to S3 (background)
   if [ -n "$LITESTREAM_PID" ] && kill -0 "$LITESTREAM_PID" 2>/dev/null; then
     (
       _t="$LITESTREAM_SHUTDOWN_TIMEOUT"
@@ -60,13 +56,9 @@ shutdown_all() {
     _sd_litestream_pid=$!
   fi
 
-  # Step 5: Stop Tailscale (background — has internal timeouts)
   ( tailscale_stop ) &
   _sd_tailscale_pid=$!
 
-  # ── Wait for Step 3: Litestream must stop before sync upload ──
-  # Litestream stops Vaultwarden first, then flushes WAL. Once done,
-  # no more file writes occur — safe to sync current files.
   if [ -n "$_sd_litestream_pid" ]; then
     wait "$_sd_litestream_pid" 2>/dev/null || true
   fi
@@ -74,7 +66,6 @@ shutdown_all() {
     wait "$LITESTREAM_PID" 2>/dev/null || true
   fi
 
-  # ── Step 4: Sync upload (quick mode — skip icon_cache) ──
   echo "[primary] syncing files to S3..." >&2
   ( sync_upload quick ) &
   _sd_upload_pid=$!; _t="$FINAL_UPLOAD_TIMEOUT"
@@ -87,7 +78,6 @@ shutdown_all() {
   fi
   wait "$_sd_upload_pid" 2>/dev/null || echo "[primary] WARNING: sync upload failed" >&2
 
-  # ── Collect remaining parallel tasks (Steps 2, 5) ──
   if [ -n "$_sd_backup_pid" ]; then
     wait "$_sd_backup_pid" 2>/dev/null || true
   fi
@@ -113,28 +103,42 @@ cleanup() {
 
 trap cleanup TERM INT
 
-# ── Startup ──────────────────────────────────────────────────────
-
 mkdir -p /data/attachments /data/sends
 
-# Restore database from S3
 rm -f "$LITESTREAM_DB_PATH" "$LITESTREAM_DB_PATH-shm" "$LITESTREAM_DB_PATH-wal"
 rm -rf "$LITESTREAM_DB_PATH-litestream"
 
-echo "[primary] restoring database from S3..." >&2
-if ! litestream restore -if-replica-exists -config /etc/litestream.yml "$LITESTREAM_DB_PATH"; then
-  echo "[primary] ERROR: database restore failed (check S3 connectivity)" >&2
+echo "[primary] restoring from S3 (parallel: database + files)..." >&2
+
+(
+  if ! litestream restore -if-replica-exists -config /etc/litestream.yml "$LITESTREAM_DB_PATH"; then
+    echo "[primary] ERROR: database restore failed (check S3 connectivity)" >&2
+    exit 1
+  fi
+  echo "[primary] database restored" >&2
+) &
+_startup_db_pid=$!
+
+(
+  if ! sync_download; then
+    echo "[primary] ERROR: file download failed (check S3 connectivity)" >&2
+    exit 1
+  fi
+  echo "[primary] files downloaded" >&2
+) &
+_startup_files_pid=$!
+
+_startup_failed=0
+wait "$_startup_db_pid" || _startup_failed=1
+wait "$_startup_files_pid" || _startup_failed=1
+
+if [ "$_startup_failed" -eq 1 ]; then
+  echo "[primary] ERROR: startup restore/download failed" >&2
   exit 1
 fi
 
-echo "[primary] downloading files from S3..." >&2
-if ! sync_download; then
-  echo "[primary] ERROR: initial download failed (check S3 connectivity)" >&2
-  exit 1
-fi
 write_sync_status "ok"
 
-# Startup backup (if enabled)
 if [ "${BACKUP_ENABLED:-false}" = "true" ] && [ "${BACKUP_ON_STARTUP:-false}" = "true" ]; then
   echo "[primary] running startup backup..." >&2
   if create_backup; then
@@ -144,9 +148,7 @@ if [ "${BACKUP_ENABLED:-false}" = "true" ] && [ "${BACKUP_ON_STARTUP:-false}" = 
   fi
 fi
 
-# ── Background loops ────────────────────────────────────────────
 
-# Sync loop
 echo "[primary] starting sync loop (interval=${PRIMARY_SYNC_INTERVAL}s)" >&2
 (
   while true; do
@@ -163,7 +165,6 @@ echo "[primary] starting sync loop (interval=${PRIMARY_SYNC_INTERVAL}s)" >&2
 ) &
 SYNC_PID=$!
 
-# Backup loop (if enabled)
 if [ "${BACKUP_ENABLED:-false}" = "true" ]; then
   echo "[primary] backup schedule: ${BACKUP_CRON}" >&2
   (
@@ -185,7 +186,6 @@ if [ "${BACKUP_ENABLED:-false}" = "true" ]; then
   BACKUP_PID=$!
 fi
 
-# ── Launch Vaultwarden ──────────────────────────────────────────
 
 echo "[primary] starting vaultwarden..." >&2
 litestream replicate -config /etc/litestream.yml -exec "/vaultwarden" &

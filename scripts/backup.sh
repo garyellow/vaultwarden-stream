@@ -22,7 +22,6 @@ cleanup_backups() {
 
   [ -z "$all_backups" ] && return 0
 
-  # List files older than retention period
   old_files=$(rclone_safe lsf "$target" --min-age "${retention_days}d" 2>/dev/null | \
     grep -E "^vaultwarden-[0-9]{8}-[0-9]{6}\.(tar\.gz|tar\.gz\.enc|tar)$" || true)
 
@@ -35,7 +34,6 @@ cleanup_backups() {
   deleted=0
 
   if [ "$recent" -ge "$min_keep" ]; then
-    # Delete all old backups
     for file in $old_files; do
       rclone_safe deletefile "${target}${file}" && deleted=$((deleted + 1)) || true
     done
@@ -62,7 +60,9 @@ upload_backup() {
   local_file="$1"
   [ -n "${BACKUP_REMOTES:-}" ] || return 1
 
-  success=0
+  _ub_pids=""
+  _ub_count=0
+
   remaining="$BACKUP_REMOTES"
   while [ -n "$remaining" ]; do
     case "$remaining" in
@@ -71,15 +71,33 @@ upload_backup() {
     esac
     dest=$(echo "$dest" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
     [ -z "$dest" ] && continue
-    if rclone_safe copy "$local_file" "${dest}/"; then
-      echo "[backup] uploaded to ${dest}" >&2
+
+    (
+      if rclone_safe copy "$local_file" "${dest}/"; then
+        echo "[backup] uploaded to ${dest}" >&2
+        exit 0
+      else
+        echo "[backup] WARNING: upload to ${dest} failed" >&2
+        exit 1
+      fi
+    ) &
+    _ub_pids="$_ub_pids $!"
+    _ub_count=$((_ub_count + 1))
+  done
+
+  success=0
+  for pid in $_ub_pids; do
+    if wait "$pid"; then
       success=1
-    else
-      echo "[backup] WARNING: upload to ${dest} failed" >&2
     fi
   done
 
-  [ "$success" -eq 1 ] && return 0
+  if [ "$success" -eq 1 ]; then
+    echo "[backup] successfully uploaded to at least 1 of ${_ub_count} remote(s)" >&2
+    return 0
+  fi
+
+  echo "[backup] ERROR: all ${_ub_count} upload(s) failed" >&2
   return 1
 }
 
@@ -87,6 +105,7 @@ upload_backup() {
 cleanup_all_remotes() {
   [ -n "${BACKUP_REMOTES:-}" ] || return 0
 
+  _car_pids=""
   remaining="$BACKUP_REMOTES"
   while [ -n "$remaining" ]; do
     case "$remaining" in
@@ -95,11 +114,16 @@ cleanup_all_remotes() {
     esac
     dest=$(echo "$dest" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
     [ -z "$dest" ] && continue
-    cleanup_backups "${dest}/"
+
+    ( cleanup_backups "${dest}/" ) &
+    _car_pids="$_car_pids $!"
+  done
+
+  for pid in $_car_pids; do
+    wait "$pid" || true
   done
 }
 
-# Check if a value matches a cron field expression
 cron_field_match() {
   field="$1"
   value="$2"
@@ -139,7 +163,6 @@ cron_field_match() {
   return 1
 }
 
-# Check if current time matches cron expression (minute hour day month weekday)
 cron_matches_now() {
   set -f; set -- $1; set +f
   _cm="$1" _ch="$2" _cd="$3" _cM="$4" _cw="$5"
@@ -163,7 +186,6 @@ create_backup() {
   format="${BACKUP_FORMAT:-tar.gz}"
   password="${BACKUP_PASSWORD:-}"
 
-  # Determine file extension
   case "$format" in
     tar.gz)
       if [ -n "$password" ]; then ext="tar.gz.enc"; else ext="tar.gz"; fi
@@ -179,7 +201,6 @@ create_backup() {
   backup_name="vaultwarden-${timestamp}.${ext}"
   mkdir -p "$backup_dir"
 
-  # Database snapshot (always included)
   if ! sqlite3 "$LITESTREAM_DB_PATH" ".backup '${backup_dir}/db.sqlite3'"; then
     echo "[backup] ERROR: database snapshot failed" >&2
     rm -rf "$backup_dir"
@@ -187,40 +208,61 @@ create_backup() {
     return 1
   fi
 
-  # Attachments (configurable)
+  _cb_attach_pid=""
+  _cb_sends_pid=""
+  _cb_icon_pid=""
+
+  # Attachments
   if [ "${BACKUP_INCLUDE_ATTACHMENTS:-true}" = "true" ]; then
-    if [ -d /data/attachments ] && [ "$(ls -A /data/attachments 2>/dev/null)" ]; then
-      cp -a /data/attachments "$backup_dir/"
-    fi
+    (
+      if [ -d /data/attachments ] && [ "$(ls -A /data/attachments 2>/dev/null)" ]; then
+        cp -a /data/attachments "$backup_dir/"
+      fi
+    ) &
+    _cb_attach_pid=$!
   fi
 
-  # Sends (configurable)
+  # Sends
   if [ "${BACKUP_INCLUDE_SENDS:-true}" = "true" ]; then
-    if [ -d /data/sends ] && [ "$(ls -A /data/sends 2>/dev/null)" ]; then
-      cp -a /data/sends "$backup_dir/"
-    fi
+    (
+      if [ -d /data/sends ] && [ "$(ls -A /data/sends 2>/dev/null)" ]; then
+        cp -a /data/sends "$backup_dir/"
+      fi
+    ) &
+    _cb_sends_pid=$!
   fi
 
-  # RSA keys and config (configurable)
+  # Icon cache
+  if [ "${BACKUP_INCLUDE_ICON_CACHE:-false}" = "true" ]; then
+    (
+      if [ -d /data/icon_cache ] && [ "$(ls -A /data/icon_cache 2>/dev/null)" ]; then
+        cp -a /data/icon_cache "$backup_dir/"
+      fi
+    ) &
+    _cb_icon_pid=$!
+  fi
+
+  # RSA keys and config
   if [ "${BACKUP_INCLUDE_CONFIG:-true}" = "true" ]; then
     for file in $CORE_FILES; do
       [ -f "/data/$file" ] && cp -a "/data/$file" "$backup_dir/"
     done
   fi
 
-  # Icon cache (configurable)
-  if [ "${BACKUP_INCLUDE_ICON_CACHE:-false}" = "true" ]; then
-    if [ -d /data/icon_cache ] && [ "$(ls -A /data/icon_cache 2>/dev/null)" ]; then
-      cp -a /data/icon_cache "$backup_dir/"
-    fi
+  if [ -n "$_cb_attach_pid" ]; then
+    wait "$_cb_attach_pid" || true
+  fi
+  if [ -n "$_cb_sends_pid" ]; then
+    wait "$_cb_sends_pid" || true
+  fi
+  if [ -n "$_cb_icon_pid" ]; then
+    wait "$_cb_icon_pid" || true
   fi
 
-  # Create archive
   archive_ok=false
   case "$format" in
     tar.gz)
       if [ -n "$password" ]; then
-        # Create unencrypted archive first to capture exit code safely
         temp_archive="/tmp/vw-temp-${timestamp}.tar.gz"
         if tar -czf "$temp_archive" -C "$backup_dir" .; then
           if openssl enc -aes-256-cbc -pbkdf2 -pass env:BACKUP_PASSWORD \
@@ -230,7 +272,6 @@ create_backup() {
             echo "[backup] ERROR: encryption failed" >&2
           fi
         fi
-        # Clean up temp archive regardless of success/failure
         rm -f "$temp_archive"
       else
         if tar -czf "/tmp/${backup_name}" -C "$backup_dir" .; then
@@ -256,7 +297,6 @@ create_backup() {
 
   echo "[backup] created ${backup_name}" >&2
 
-  # Upload to all configured remotes
   if ! upload_backup "/tmp/${backup_name}"; then
     echo "[backup] ERROR: all uploads failed" >&2
     rm -f "/tmp/${backup_name}"
@@ -266,7 +306,6 @@ create_backup() {
 
   rm -f "/tmp/${backup_name}"
 
-  # Cleanup old backups on all remotes
   cleanup_all_remotes
 
   # Send success notification

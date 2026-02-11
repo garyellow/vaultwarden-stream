@@ -117,7 +117,7 @@ If primary fails, redirect clients to secondary. Login sessions are preserved.
 | Crash (SIGKILL) | Up to sync interval (default: 1s) |
 
 Best practices:
-- Set `stop_grace_period: 120s` in docker-compose.yml
+- Set `stop_grace_period: 300s` in docker-compose.yml
 - Enable S3 bucket versioning for deletion protection
 
 ## Troubleshooting

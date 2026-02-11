@@ -74,24 +74,42 @@ trap cleanup TERM INT
 
 mkdir -p /data/attachments /data/sends
 
-# ── Initial restore from S3 ─────────────────────────────────────
+
 rm -f "$LITESTREAM_DB_PATH" "$LITESTREAM_DB_PATH-shm" "$LITESTREAM_DB_PATH-wal"
 rm -rf "$LITESTREAM_DB_PATH-litestream"
 
-echo "[secondary] restoring database from S3..." >&2
-if ! litestream restore -if-replica-exists -config /etc/litestream.yml "$LITESTREAM_DB_PATH"; then
-  echo "[secondary] ERROR: database restore failed (check S3 connectivity)" >&2
+echo "[secondary] restoring from S3 (parallel: database + files)..." >&2
+
+(
+  if ! litestream restore -if-replica-exists -config /etc/litestream.yml "$LITESTREAM_DB_PATH"; then
+    echo "[secondary] ERROR: database restore failed (check S3 connectivity)" >&2
+    exit 1
+  fi
+  echo "[secondary] database restored" >&2
+) &
+_startup_db_pid=$!
+
+(
+  if ! sync_download; then
+    echo "[secondary] ERROR: file download failed (check S3 connectivity)" >&2
+    exit 1
+  fi
+  echo "[secondary] files downloaded" >&2
+) &
+_startup_files_pid=$!
+
+_startup_failed=0
+wait "$_startup_db_pid" || _startup_failed=1
+wait "$_startup_files_pid" || _startup_failed=1
+
+if [ "$_startup_failed" -eq 1 ]; then
+  echo "[secondary] ERROR: startup restore/download failed" >&2
   exit 1
 fi
 
-echo "[secondary] downloading files from S3..." >&2
-if ! sync_download; then
-  echo "[secondary] ERROR: initial download failed (check S3 connectivity)" >&2
-  exit 1
-fi
 write_sync_status "ok"
 
-# ── Start Vaultwarden ───────────────────────────────────────────
+
 if [ "$DEPLOYMENT_MODE" = "serverless" ]; then
   echo "[secondary] starting vaultwarden (serverless DR — no periodic refresh)" >&2
 else
@@ -99,27 +117,12 @@ else
 fi
 start_vaultwarden
 
-# Main loop: Keep Vaultwarden running and refresh data periodically
-#
-# Persistent mode:
-#   - Refreshes data from S3 every SECONDARY_SYNC_INTERVAL seconds
-#   - Downloads tar archives while Vaultwarden is running (safe)
-#   - Briefly restarts Vaultwarden to swap the database
-#
-# Serverless mode:
-#   - No periodic refresh needed (data is restored fresh on every cold start)
-#
-# Both modes:
-#   - Writes heartbeat status every 60 seconds for healthcheck
-#   - Automatically restarts Vaultwarden if it exits unexpectedly
-
 heartbeat_counter=0
 seconds_since_refresh=0
 while [ -z "$STOP_REQUESTED" ]; do
   sleep 1
   heartbeat_counter=$((heartbeat_counter + 1))
 
-  # Supervised restart: if Vaultwarden exited unexpectedly, restart it
   if [ -n "$VW_PID" ] && ! kill -0 "$VW_PID" 2>/dev/null; then
     wait "$VW_PID" 2>/dev/null || true
     if [ -z "$STOP_REQUESTED" ]; then
@@ -128,28 +131,53 @@ while [ -z "$STOP_REQUESTED" ]; do
     fi
   fi
 
-  # Write heartbeat every 60s so healthcheck stays green
   if [ "$heartbeat_counter" -ge 60 ]; then
     heartbeat_counter=0
     write_sync_status "ok"
   fi
 
-  # Periodic refresh (persistent mode only)
   if [ "$DEPLOYMENT_MODE" != "serverless" ]; then
     seconds_since_refresh=$((seconds_since_refresh + 1))
     if [ "$seconds_since_refresh" -ge "$SECONDARY_SYNC_INTERVAL" ]; then
       seconds_since_refresh=0
       refresh_ok=true
 
-      # Download files (safe while VW is running)
-      if ! sync_download; then
-        echo "[secondary] WARNING: file download failed" >&2
+      _refresh_tmp_db="/tmp/db-refresh.sqlite3"
+      rm -f "$_refresh_tmp_db" "${_refresh_tmp_db}-shm" "${_refresh_tmp_db}-wal"
+
+      (
+        if ! sync_download; then
+          echo "[secondary] WARNING: file download failed" >&2
+          exit 1
+        fi
+      ) &
+      _refresh_files_pid=$!
+
+      (
+        if ! litestream restore -if-replica-exists -config /etc/litestream.yml \
+            -o "$_refresh_tmp_db" "$LITESTREAM_DB_PATH"; then
+          exit 1
+        fi
+      ) &
+      _refresh_db_pid=$!
+
+      if ! wait "$_refresh_files_pid"; then
         refresh_ok=false
       fi
 
-      # Restore database + restart Vaultwarden
-      if ! restore_database; then
+      _db_downloaded=true
+      if ! wait "$_refresh_db_pid"; then
+        echo "[secondary] WARNING: database download failed, keeping current copy" >&2
+        rm -f "$_refresh_tmp_db"
+        _db_downloaded=false
         refresh_ok=false
+      fi
+
+      if [ "$_db_downloaded" = true ] && [ -f "$_refresh_tmp_db" ]; then
+        stop_vaultwarden
+        rm -f "$LITESTREAM_DB_PATH" "$LITESTREAM_DB_PATH-shm" "$LITESTREAM_DB_PATH-wal"
+        mv "$_refresh_tmp_db" "$LITESTREAM_DB_PATH"
+        start_vaultwarden
       fi
 
       if [ "$refresh_ok" = true ]; then

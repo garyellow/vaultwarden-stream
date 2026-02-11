@@ -5,7 +5,7 @@ services:
     image: ghcr.io/garyellow/vaultwarden-stream:latest
     container_name: vaultwarden
     restart: unless-stopped
-    stop_grace_period: 120s
+    stop_grace_period: 300s
     env_file: .env
     ports:
       - "80:80"

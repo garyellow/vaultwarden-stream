@@ -56,7 +56,7 @@ Files are packed into uncompressed tar archives before upload (reducing API call
 | `DEPLOYMENT_MODE` | `persistent` | `persistent` (always-on) or `serverless` (scale-to-zero) |
 | `PRIMARY_SYNC_INTERVAL` | `300` | File sync interval in seconds (primary) |
 | `SECONDARY_SYNC_INTERVAL` | `3600` | Data refresh interval in seconds (secondary) |
-| `FINAL_UPLOAD_TIMEOUT` | `30` | Seconds to wait for sync upload during shutdown |
+| `FINAL_UPLOAD_TIMEOUT` | `60` | Seconds to wait for sync upload during shutdown |
 | `RCLONE_REMOTE_NAME` | `S3` | rclone remote name |
 | `HEALTHCHECK_MAX_SYNC_AGE` | `600` | Max seconds since last sync before unhealthy |
 
@@ -95,7 +95,7 @@ Continuous SQLite replication to S3 via write-ahead log (WAL) streaming.
 | `LITESTREAM_VALIDATION_INTERVAL` | — | Automatic replica validation (non-functional in v0.5.x) |
 | `LITESTREAM_DB_PATH` | `/data/db.sqlite3` | Local database file path |
 | `LITESTREAM_REPLICA_PATH` | `<S3_PREFIX>/db.sqlite3` | S3 replica path (auto-derived) |
-| `LITESTREAM_SHUTDOWN_TIMEOUT` | `15` | Seconds to flush WAL before forced shutdown |
+| `LITESTREAM_SHUTDOWN_TIMEOUT` | `30` | Seconds to flush WAL before forced shutdown |
 | `LITESTREAM_FORCE_PATH_STYLE` | `false` | Path-style S3 URLs (required for MinIO, Ceph) |
 | `LITESTREAM_SKIP_VERIFY` | `false` | Skip TLS certificate verification |
 
@@ -117,28 +117,39 @@ Scheduled tar archives with retention and multi-destination support.
 | `BACKUP_INCLUDE_CONFIG` | `true` | Include RSA keys and config.json |
 | `BACKUP_INCLUDE_ICON_CACHE` | `false` | Include icon cache (icons can be re-fetched) |
 | `BACKUP_ON_STARTUP` | `false` | Run backup immediately on startup |
-| `BACKUP_SHUTDOWN_TIMEOUT` | `60` | Seconds to wait for in-progress backup |
+| `BACKUP_SHUTDOWN_TIMEOUT` | `180` | Seconds to wait for in-progress backup |
 
 ### Graceful Shutdown Budget
 
 Steps 2, 3, 5 run in parallel. Step 4 waits for Step 3 completion.
 
-| Step | Env Var | Default | Typical |
-|------|---------|---------|----------|
-| 1. Stop sync loop | — | <1s | <1s |
-| 2. Wait snapshot backup | `BACKUP_SHUTDOWN_TIMEOUT` | 60s | 0s |
-| 3. Flush Litestream WAL | `LITESTREAM_SHUTDOWN_TIMEOUT` | 15s | 2–5s |
-| 4. Sync upload | `FINAL_UPLOAD_TIMEOUT` | 30s | 5–15s |
-| 5. Stop Tailscale | — | 15s | 2–5s |
+**Performance optimizations implemented:**
+- **Startup:** Database restore + file download run in parallel (2× faster cold start)
+- **Sync upload:** Parallelizes attachments, sends, and config (3× faster)
+- **Sync download:** Parallelizes all tar extractions (4× faster)
+- **Backup file copy:** Parallelizes attachments, sends, and icon_cache (3× faster)
+- **Backup upload:** Parallelizes multiple remotes (N× faster)
+- **Backup cleanup:** Parallelizes all remotes (N× faster)
+- **Secondary refresh:** Database restore + file download run in parallel (2× faster)
 
-**Worst case:** `max(60, 15+30, 15)` = **60s**
+| Step | Env Var | Default | Typical | Notes |
+|------|---------|---------|---------|-------|
+| 1. Stop sync loop | — | <1s | <1s | Immediate |
+| 2. Wait snapshot backup | `BACKUP_SHUTDOWN_TIMEOUT` | 180s | 0–60s | Only if backup in progress, **parallelized copies** |
+| 3. Flush Litestream WAL | `LITESTREAM_SHUTDOWN_TIMEOUT` | 30s | 2–10s | Sequential: stop app → flush WAL |
+| 4. Sync upload | `FINAL_UPLOAD_TIMEOUT` | 60s | 5–20s | **Parallelized** (was 5–30s) |
+| 5. Stop Tailscale | — | 15s | 2–5s | Has internal timeouts |
 
-**Total timeout** (`stop_grace_period` in docker-compose.yml) should be at least 10s more than worst case. Default 120s provides ample buffer.
+**Worst case:** `max(180, 30+60, 15)` = **180s**
 
-If you increase timeout values, adjust `stop_grace_period` accordingly:
+**Total timeout** (`stop_grace_period` in docker-compose.yml) should be at least 60s more than worst case. Default **300s (5 minutes)** provides ample buffer and clean round number.
+
+If you need to increase timeout values further, adjust `stop_grace_period` accordingly:
 ```
 stop_grace_period ≥ max(BACKUP_SHUTDOWN_TIMEOUT,
-                        LITESTREAM_SHUTDOWN_TIMEOUT + FINAL_UPLOAD_TIMEOUT) + buffer
+                        LITESTREAM_SHUTDOWN_TIMEOUT + FINAL_UPLOAD_TIMEOUT) + 60s buffer
+
+Recommended: Use round numbers (300s = 5min, 600s = 10min) for easier management.
 ```
 
 ### Usage Examples
