@@ -33,7 +33,7 @@ validate_boolean() {
 # Validate Litestream duration format (e.g., 1s, 30m, 24h)
 validate_duration() {
   case "$2" in
-    *[0-9]s|*[0-9]m|*[0-9]h|*[0-9]ms)
+    *[0-9]s|*[0-9]m|*[0-9]h)
       # Extract numeric part and validate
       _vd_num=$(echo "$2" | sed 's/[a-z]*$//')
       case "$_vd_num" in

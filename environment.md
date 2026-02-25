@@ -89,7 +89,7 @@ Continuous SQLite replication to S3 via write-ahead log (WAL) streaming.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `LITESTREAM_SYNC_INTERVAL` | `1s` | WAL replication interval (data loss window) |
-| `LITESTREAM_SNAPSHOT_INTERVAL` | `30m` | Full snapshot creation interval |
+| `LITESTREAM_SNAPSHOT_INTERVAL` | `24h` | Full snapshot creation interval |
 | `LITESTREAM_RETENTION` | `24h` | Snapshot/WAL retention period |
 | `LITESTREAM_VALIDATION_INTERVAL` | — | Automatic replica validation (non-functional in v0.5.x) |
 | `LITESTREAM_DB_PATH` | `/data/db.sqlite3` | Local database file path |
@@ -135,7 +135,7 @@ Scheduled tar archives with retention and multi-destination support.
 Steps 2, 3, 5 run in parallel. Step 4 waits for Step 3 completion.
 
 **Performance optimizations implemented:**
-- **Startup:** Database restore + file download run in parallel (2× faster cold start)
+- **Startup:** When local DB is missing, database restore + file download run in parallel (2× faster cold start)
 - **Sync upload:** Parallelizes attachments, sends, and config (3× faster)
 - **Sync download:** Parallelizes all tar extractions (4× faster)
 - **Backup file copy:** Parallelizes attachments, sends, and icon_cache (3× faster)
@@ -283,6 +283,8 @@ Mesh VPN for private access. Compatible with Tailscale cloud and self-hosted Hea
 | `TAILSCALE_SERVE_MODE` | `https` | Serve protocol (`https`, `tls-terminated-tcp`) |
 | `TAILSCALE_FUNNEL` | `false` | Expose to the **public internet** via Tailscale Funnel |
 | `TAILSCALE_EXTRA_ARGS` | — | Additional `tailscale up` flags |
+
+> **Node identity:** `tailscaled` runs with in-memory state by default. Each container restart re-registers a new node using `TAILSCALE_AUTHKEY`. For a persistent node identity (same Tailscale IP across restarts), mount a volume at `/var/lib/tailscale`.
 
 ### Usage Examples
 

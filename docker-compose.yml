@@ -9,3 +9,9 @@ services:
     env_file: .env
     ports:
       - "80:80"
+    # Uncomment for persistent deployment:
+    # volumes:
+    #   - vaultwarden_data:/data
+
+# volumes:
+#   vaultwarden_data:

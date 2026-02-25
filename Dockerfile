@@ -55,7 +55,7 @@ ENV NODE_ROLE=primary \
 # ── Litestream (Database Replication) ────────────────────────────────────────
 ENV LITESTREAM_DB_PATH=/data/db.sqlite3 \
     LITESTREAM_SYNC_INTERVAL=1s \
-    LITESTREAM_SNAPSHOT_INTERVAL=30m \
+    LITESTREAM_SNAPSHOT_INTERVAL=24h \
     LITESTREAM_RETENTION=24h \
     LITESTREAM_VALIDATION_INTERVAL= \
     LITESTREAM_SHUTDOWN_TIMEOUT=30 \

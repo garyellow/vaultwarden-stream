@@ -107,39 +107,44 @@ trap cleanup TERM INT
 
 mkdir -p /data/attachments /data/sends
 
-rm -f "$LITESTREAM_DB_PATH" "$LITESTREAM_DB_PATH-shm" "$LITESTREAM_DB_PATH-wal"
-rm -rf "$LITESTREAM_DB_PATH-litestream"
+if [ -f "$LITESTREAM_DB_PATH" ]; then
+  echo "[primary] local database exists, skipping startup restore/download" >&2
+  write_sync_status "ok"
+else
+  rm -f "$LITESTREAM_DB_PATH" "$LITESTREAM_DB_PATH-shm" "$LITESTREAM_DB_PATH-wal"
+  rm -rf "$LITESTREAM_DB_PATH-litestream"
 
-echo "[primary] restoring from S3 (parallel: database + files)..." >&2
+  echo "[primary] local database missing, restoring from S3 (parallel: database + files)..." >&2
 
-(
-  if ! litestream restore -if-replica-exists -config /etc/litestream.yml "$LITESTREAM_DB_PATH"; then
-    echo "[primary] ERROR: database restore failed (check S3 connectivity)" >&2
+  (
+    if ! litestream restore -if-replica-exists -config /etc/litestream.yml "$LITESTREAM_DB_PATH"; then
+      echo "[primary] ERROR: database restore failed (check S3 connectivity)" >&2
+      exit 1
+    fi
+    echo "[primary] INFO: database restored" >&2
+  ) &
+  _startup_db_pid=$!
+
+  (
+    if ! sync_download; then
+      echo "[primary] ERROR: file download failed (check S3 connectivity)" >&2
+      exit 1
+    fi
+    echo "[primary] INFO: files downloaded" >&2
+  ) &
+  _startup_files_pid=$!
+
+  _startup_failed=0
+  wait "$_startup_db_pid" || _startup_failed=1
+  wait "$_startup_files_pid" || _startup_failed=1
+
+  if [ "$_startup_failed" -eq 1 ]; then
+    echo "[primary] ERROR: startup restore/download failed" >&2
     exit 1
   fi
-  echo "[primary] INFO: database restored" >&2
-) &
-_startup_db_pid=$!
 
-(
-  if ! sync_download; then
-    echo "[primary] ERROR: file download failed (check S3 connectivity)" >&2
-    exit 1
-  fi
-  echo "[primary] INFO: files downloaded" >&2
-) &
-_startup_files_pid=$!
-
-_startup_failed=0
-wait "$_startup_db_pid" || _startup_failed=1
-wait "$_startup_files_pid" || _startup_failed=1
-
-if [ "$_startup_failed" -eq 1 ]; then
-  echo "[primary] ERROR: startup restore/download failed" >&2
-  exit 1
+  write_sync_status "ok"
 fi
-
-write_sync_status "ok"
 
 if [ "$BACKUP_ENABLED" = "true" ] && [ "$BACKUP_ON_STARTUP" = "true" ]; then
   echo "[primary] running startup backup..." >&2

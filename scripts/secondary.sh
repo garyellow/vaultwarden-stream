@@ -22,24 +22,6 @@ start_vaultwarden() {
   VW_PID=$!
 }
 
-restore_database() {
-  tmp_db="/tmp/db-refresh.sqlite3"
-  rm -f "$tmp_db" "${tmp_db}-shm" "${tmp_db}-wal"
-
-  if ! litestream restore -if-replica-exists -config /etc/litestream.yml -o "$tmp_db" "$LITESTREAM_DB_PATH"; then
-    echo "[secondary] WARNING: database restore failed, keeping current copy" >&2
-    rm -f "$tmp_db"
-    return 1
-  fi
-
-  # Swap database atomically with minimal downtime
-  stop_vaultwarden
-  rm -f "$LITESTREAM_DB_PATH" "$LITESTREAM_DB_PATH-shm" "$LITESTREAM_DB_PATH-wal"
-  mv "$tmp_db" "$LITESTREAM_DB_PATH"
-  start_vaultwarden
-  return 0
-}
-
 cleanup() {
   echo "[secondary] shutdown signal received, cleaning up..." >&2
   STOP_REQUESTED=1
@@ -133,7 +115,14 @@ while [ -z "$STOP_REQUESTED" ]; do
 
   if [ "$heartbeat_counter" -ge 60 ]; then
     heartbeat_counter=0
-    write_sync_status "ok"
+    if [ -f /tmp/sync-status.json ]; then
+      _hb_status=$(grep -o '"status":"[^"]*"' /tmp/sync-status.json 2>/dev/null | head -1 | cut -d: -f2 | tr -d '"' || true)
+      if [ "$_hb_status" != "error" ]; then
+        write_sync_status "ok"
+      fi
+    else
+      write_sync_status "ok"
+    fi
   fi
 
   if [ "$DEPLOYMENT_MODE" != "serverless" ]; then

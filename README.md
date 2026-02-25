@@ -86,7 +86,7 @@ graph TB
 - Litestream streams WAL to S3 (~1s latency)
 - Files packed into tar archives and uploaded to S3 every 5 minutes (default)
 - Optional: scheduled backups via cron
-- On startup: restores from S3 if data exists
+- On startup: restores from S3 only when local database is missing
 
 **Secondary instance (disaster recovery)**
 - On startup: restores database and files from S3
