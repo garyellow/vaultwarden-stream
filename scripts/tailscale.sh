@@ -20,8 +20,7 @@ tailscale_start() {
   authkey="${TAILSCALE_AUTHKEY}"
 
   echo "[tailscale] starting tailscaled (userspace networking)..." >&2
-  # --state=mem: keeps state in memory only; mount /var/lib/tailscale for persistent node identity
-  tailscaled --tun=userspace-networking --state=mem: >>/tmp/tailscaled.log 2>&1 &
+  tailscaled --tun=userspace-networking >>/tmp/tailscaled.log 2>&1 &
   echo "$!" > "$TAILSCALED_PID_FILE"
 
   # Build a safe argv list for "tailscale up".

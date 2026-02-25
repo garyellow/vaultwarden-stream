@@ -1,6 +1,8 @@
 # Vaultwarden Stream
 
-Vaultwarden with automated S3 backup — real-time database replication via [Litestream](https://litestream.io/), file sync via [rclone](https://rclone.org/), and optional private networking via [Tailscale](https://tailscale.com/).
+[繁體中文](README.zh-TW.md)
+
+[Vaultwarden](https://github.com/dani-garcia/vaultwarden) with automated S3 backup — real-time database replication via [Litestream](https://litestream.io/), file sync via [rclone](https://rclone.org/), and optional private networking via [Tailscale](https://tailscale.com/).
 
 ## Features
 
@@ -137,6 +139,19 @@ docker exec vaultwarden tailscale status
 
 # Run health check
 docker exec vaultwarden /app/healthcheck.sh
+```
+
+### Restore from Backup
+
+```bash
+# Compressed (tar.gz)
+tar -xzf vaultwarden-20260211-120000.tar.gz -C /data
+
+# Uncompressed (tar)
+tar -xf vaultwarden-20260211-120000.tar -C /data
+
+# Encrypted (tar.gz.enc) — decrypt then extract, prompts for BACKUP_PASSWORD
+openssl enc -d -aes-256-cbc -pbkdf2 -in vaultwarden-20260211-120000.tar.gz.enc | tar -xz -C /data
 ```
 
 ## Build from Source

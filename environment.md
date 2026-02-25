@@ -132,36 +132,15 @@ Scheduled tar archives with retention and multi-destination support.
 
 ### Graceful Shutdown Budget
 
-Steps 2, 3, 5 run in parallel. Step 4 waits for Step 3 completion.
+| Step | Env Var | Default | Notes |
+|------|---------|---------|-------|
+| 1. Stop sync loop | — | <1s | Immediate |
+| 2. Wait snapshot backup | `BACKUP_SHUTDOWN_TIMEOUT` | 180s | Only if backup in progress |
+| 3. Flush Litestream WAL | `LITESTREAM_SHUTDOWN_TIMEOUT` | 30s | Stop app → flush WAL |
+| 4. Sync upload | `SYNC_SHUTDOWN_TIMEOUT` | 60s | Parallelized |
+| 5. Stop Tailscale | — | 15s | Has internal timeouts |
 
-**Performance optimizations implemented:**
-- **Startup:** When local DB is missing, database restore + file download run in parallel (2× faster cold start)
-- **Sync upload:** Parallelizes attachments, sends, and config (3× faster)
-- **Sync download:** Parallelizes all tar extractions (4× faster)
-- **Backup file copy:** Parallelizes attachments, sends, and icon_cache (3× faster)
-- **Backup upload:** Parallelizes multiple remotes (N× faster)
-- **Backup cleanup:** Parallelizes all remotes (N× faster)
-- **Secondary refresh:** Database restore + file download run in parallel (2× faster)
-
-| Step | Env Var | Default | Typical | Notes |
-|------|---------|---------|---------|-------|
-| 1. Stop sync loop | — | <1s | <1s | Immediate |
-| 2. Wait snapshot backup | `BACKUP_SHUTDOWN_TIMEOUT` | 180s | 0–60s | Only if backup in progress, **parallelized copies** |
-| 3. Flush Litestream WAL | `LITESTREAM_SHUTDOWN_TIMEOUT` | 30s | 2–10s | Sequential: stop app → flush WAL |
-| 4. Sync upload | `SYNC_SHUTDOWN_TIMEOUT` | 60s | 5–20s | **Parallelized** |
-| 5. Stop Tailscale | — | 15s | 2–5s | Has internal timeouts |
-
-**Worst case:** `max(180, 30+60, 15)` = **180s**
-
-**Total timeout** (`stop_grace_period` in docker-compose.yml) should be at least 60s more than worst case. Default **300s (5 minutes)** provides ample buffer and clean round number.
-
-If you need to increase timeout values further, adjust `stop_grace_period` accordingly:
-```
-stop_grace_period ≥ max(BACKUP_SHUTDOWN_TIMEOUT,
-                        LITESTREAM_SHUTDOWN_TIMEOUT + SYNC_SHUTDOWN_TIMEOUT) + 60s buffer
-
-Recommended: Use round numbers (300s = 5min, 600s = 10min) for easier management.
-```
+Steps 2, 3, 5 run in parallel. Step 4 waits for Step 3. Default `stop_grace_period: 300s` is sufficient for all default settings.
 
 ### Usage Examples
 
@@ -194,44 +173,15 @@ BACKUP_ON_STARTUP=true
 BACKUP_REMOTES=S3:my-bucket/vw-backups
 ```
 
-### Restore Procedure
-
-To restore from a backup archive:
-
-```bash
-# Compressed (tar.gz)
-tar -xzf vaultwarden-20260211-120000.tar.gz -C /data
-
-# Uncompressed (tar)
-tar -xf vaultwarden-20260211-120000.tar -C /data
-
-# Encrypted (tar.gz.enc) — prompts for password
-openssl enc -d -aes-256-cbc -pbkdf2 -in vaultwarden-20260211-120000.tar.gz.enc | tar -xz -C /data
-```
-
 ## Notifications (Optional)
 
-HTTP ping endpoints for monitoring backup and sync operations via external monitoring services.
+HTTP ping notifications for monitoring services (Healthchecks.io, Cronitor, etc.).
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `NOTIFICATION_URL` | — | Base HTTP(S) URL for notifications |
 | `NOTIFICATION_EVENTS` | — | Events to notify (comma-separated)<br>Leave empty to notify on all events |
 | `NOTIFICATION_TIMEOUT` | `10` | HTTP request timeout in seconds |
-
-### Protocol
-
-Uses standard HTTP GET requests:
-
-**Success:**
-```bash
-GET $NOTIFICATION_URL
-```
-
-**Failure:**
-```bash
-GET $NOTIFICATION_URL/fail
-```
 
 ### Supported Events
 
@@ -241,20 +191,7 @@ GET $NOTIFICATION_URL/fail
 | `backup_failure` | Scheduled backup failed | `$NOTIFICATION_URL/fail` |
 | `sync_error` | File sync failed (upload/download) | `$NOTIFICATION_URL/fail` |
 
-### Usage
-
-**Basic configuration:**
-```bash
-NOTIFICATION_URL=https://your-monitoring-service.com/ping/YOUR_ID
-```
-
-**Filter specific events:**
-```bash
-NOTIFICATION_URL=https://your-monitoring-service.com/ping/YOUR_ID
-NOTIFICATION_EVENTS=backup_success,backup_failure
-```
-
-**Note:** Notifications are best-effort only and never block backup/sync operations.
+Notifications are best-effort and never block backup/sync operations.
 
 ## Advanced Options
 
@@ -284,7 +221,7 @@ Mesh VPN for private access. Compatible with Tailscale cloud and self-hosted Hea
 | `TAILSCALE_FUNNEL` | `false` | Expose to the **public internet** via Tailscale Funnel |
 | `TAILSCALE_EXTRA_ARGS` | — | Additional `tailscale up` flags |
 
-> **Node identity:** `tailscaled` runs with in-memory state by default. Each container restart re-registers a new node using `TAILSCALE_AUTHKEY`. For a persistent node identity (same Tailscale IP across restarts), mount a volume at `/var/lib/tailscale`.
+> **Node identity & TLS:** `tailscaled` writes state to `/var/lib/tailscale`, including TLS certificates required for Serve/Funnel HTTPS. Without a mounted volume, state is lost on container restart (node re-registers, new cert issued). Mount a volume at `/var/lib/tailscale` for persistent node identity and to avoid re-issuing certificates on every restart.
 
 ### Usage Examples
 
@@ -319,5 +256,3 @@ TAILSCALE_ENABLED=true
 TAILSCALE_AUTHKEY=your-headscale-key
 TAILSCALE_LOGIN_SERVER=https://headscale.example.com
 ```
-
-**Note:** Containers execute `tailscale logout` on shutdown to ensure consistent DNS URLs across restarts.
