@@ -117,6 +117,9 @@ fi
 validate_duration LITESTREAM_SYNC_INTERVAL "$LITESTREAM_SYNC_INTERVAL"
 validate_duration LITESTREAM_SNAPSHOT_INTERVAL "$LITESTREAM_SNAPSHOT_INTERVAL"
 validate_duration LITESTREAM_RETENTION "$LITESTREAM_RETENTION"
+if [ -n "${LITESTREAM_VALIDATION_INTERVAL:-}" ]; then
+  validate_duration LITESTREAM_VALIDATION_INTERVAL "$LITESTREAM_VALIDATION_INTERVAL"
+fi
 
 # Validate Litestream boolean flags
 validate_boolean LITESTREAM_FORCE_PATH_STYLE "$LITESTREAM_FORCE_PATH_STYLE"
@@ -139,6 +142,8 @@ case "$RCLONE_REMOTE_NAME" in
     exit 1
     ;;
 esac
+# Normalize to uppercase — rclone config env var names must be uppercase
+RCLONE_REMOTE_NAME=$(echo "$RCLONE_REMOTE_NAME" | tr '[:lower:]' '[:upper:]')
 export RCLONE_REMOTE_NAME
 
 export "RCLONE_CONFIG_${RCLONE_REMOTE_NAME}_TYPE=s3"
@@ -248,10 +253,11 @@ if [ "$BACKUP_ENABLED" = "true" ]; then
         ;;
     esac
     remote_name="${remote_path%%:*}"
-    eval "remote_type=\${RCLONE_CONFIG_${remote_name}_TYPE:-}"
+    _rn_upper=$(echo "$remote_name" | tr '[:lower:]' '[:upper:]')
+    eval "remote_type=\${RCLONE_CONFIG_${_rn_upper}_TYPE:-}"
     if [ -z "$remote_type" ]; then
       echo "[entrypoint] WARNING: remote '$remote_name' is not configured via env vars" >&2
-      echo "[entrypoint]   Set RCLONE_CONFIG_${remote_name}_TYPE and other required variables" >&2
+      echo "[entrypoint]   Set RCLONE_CONFIG_${_rn_upper}_TYPE and other required variables" >&2
     else
       echo "[entrypoint]   ✓ remote '$remote_name' configured (type=${remote_type})" >&2
     fi

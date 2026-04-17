@@ -116,7 +116,7 @@ If primary fails, redirect clients to secondary. Login sessions are preserved.
 | Event | Data Loss |
 |-------|-----------|
 | Graceful shutdown | None |
-| Crash (SIGKILL) | Up to sync interval (default: 1s) |
+| Crash (SIGKILL) | Database: ≤ WAL interval (default: 1s) · Files: ≤ sync interval (default: 5 min) |
 
 Best practices:
 - Set `stop_grace_period: 300s` in docker-compose.yml
